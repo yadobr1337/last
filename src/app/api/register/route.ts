@@ -1,8 +1,8 @@
-import { Role } from "@prisma/client";
+import { Prisma, Role } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { verifyCaptchaToken } from "@/lib/captcha";
-import { db } from "@/lib/db";
+import { writeTransaction } from "@/lib/db";
 import {
   buildEmailVerificationIdentifier,
   issueEmailCode,
@@ -15,14 +15,16 @@ import { ensureUserPublicId } from "@/lib/user-identity";
 
 const registerSchema = z
   .object({
-    email: z.string().email(),
-    password: z.string().min(8).max(64),
-    captchaToken: z.string().optional(),
+    email: z.string().trim().max(254).email().refine((value) => !value.toLowerCase().endsWith("@1vpn.local")),
+    password: z.string().min(8).max(64).refine((value) => Buffer.byteLength(value) <= 72),
+    captchaToken: z.string().max(8192).optional(),
   })
   .strict();
 
 export async function POST(request: Request) {
-  const payload = registerSchema.parse(await request.json());
+  const input = registerSchema.safeParse(await request.json().catch(() => null));
+  if (!input.success) return NextResponse.json({ error: "Проверьте поля формы." }, { status: 400 });
+  const payload = input.data;
   const settings = await getSettings();
 
   if (settings.maintenanceEnabled) {
@@ -42,20 +44,13 @@ export async function POST(request: Request) {
     }
   }
 
-  const existing = await db.user.findUnique({
-    where: { email: payload.email.toLowerCase() },
-  });
-
-  if (existing) {
-    return NextResponse.json({ error: "Email is already registered." }, { status: 409 });
-  }
-
   const passwordHash = await hashPassword(payload.password);
 
-  const user = await db.$transaction(async (tx) => {
+  const user = await writeTransaction(async (tx) => {
     const created = await tx.user.create({
       data: {
         email: payload.email.toLowerCase(),
+        pendingEmail: payload.email.toLowerCase(),
         passwordHash,
         role: Role.USER,
         hwidDeviceLimit: DEFAULT_HWID_DEVICE_LIMIT,
@@ -64,7 +59,13 @@ export async function POST(request: Request) {
 
     await ensureUserSquad(created.id, tx);
     return created;
+  }).catch((error: unknown) => {
+    if (error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002" && Array.isArray(error.meta?.target) &&
+        error.meta.target.includes("email")) return null;
+    throw error;
   });
+  if (!user) return NextResponse.json({ error: "Email is already registered." }, { status: 409 });
 
   const publicId = await ensureUserPublicId(user.id);
 

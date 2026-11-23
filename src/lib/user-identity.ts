@@ -1,64 +1,19 @@
-import { db } from "@/lib/db";
-
-function randomNumericId(length = 8) {
-  let value = "";
-
-  for (let index = 0; index < length; index += 1) {
-    const digit = index === 0 ? 1 + Math.floor(Math.random() * 9) : Math.floor(Math.random() * 10);
-    value += String(digit);
-  }
-
-  return value;
-}
-
-export async function generateUniquePublicId() {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const publicId = randomNumericId();
-    const existing = await db.user.findUnique({
-      where: { publicId },
-      select: { id: true },
-    });
-
-    if (!existing) {
-      return publicId;
-    }
-  }
-
-  throw new Error("Failed to generate a unique public ID.");
-}
+import { randomInt } from "node:crypto";
+import { db, writeTransaction } from "@/lib/db";
 
 export async function ensureUserPublicId(userId: string) {
-  const user = await db.user.findUnique({
-    where: { id: userId },
-    select: { id: true, publicId: true },
+  return writeTransaction(async (tx) => {
+    const user = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { publicId: true } });
+    if (user.publicId) return user.publicId;
+
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const publicId = String(randomInt(10_000_000, 100_000_000));
+      if (await tx.user.findUnique({ where: { publicId }, select: { id: true } })) continue;
+      await tx.user.update({ where: { id: userId }, data: { publicId } });
+      return publicId;
+    }
+    throw new Error("Failed to generate a unique public ID.");
   });
-
-  if (!user) {
-    throw new Error("User not found.");
-  }
-
-  if (user.publicId) {
-    return user.publicId;
-  }
-
-  const publicId = await generateUniquePublicId();
-  await db.user.update({
-    where: { id: user.id },
-    data: { publicId },
-  });
-
-  return publicId;
-}
-
-export async function ensureAllUsersHavePublicIds() {
-  const users = await db.user.findMany({
-    where: { publicId: null },
-    select: { id: true },
-  });
-
-  for (const user of users) {
-    await ensureUserPublicId(user.id);
-  }
 }
 
 export async function resolveUserIdentifier(rawIdentifier: string) {

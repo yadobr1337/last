@@ -17,7 +17,6 @@ import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { DEFAULT_SUPPORT_TELEGRAM_URL } from "@/lib/site";
-import { ensureUserPublicId } from "@/lib/user-identity";
 
 function getEmailStatusMessage(status?: string) {
   switch (status) {
@@ -31,7 +30,9 @@ function getEmailStatusMessage(status?: string) {
     case "smtp_auth_error":
     case "smtp_connection_error":
     case "send_error":
-      return null;
+      return { tone: "error", text: "Не удалось отправить код. Попробуйте позже." };
+    case "invalid_email":
+      return { tone: "error", text: "Укажите действительный email." };
     case "email_exists":
       return { tone: "error", text: "Этот email уже используется другим аккаунтом." };
     case "invalid_code":
@@ -53,7 +54,7 @@ function getPasswordStatusMessage(status?: string) {
     case "smtp_auth_error":
     case "smtp_connection_error":
     case "send_error":
-      return null;
+      return { tone: "error", text: "Не удалось отправить код. Попробуйте позже." };
     case "invalid_code":
       return { tone: "error", text: "Неверный или просроченный код для смены пароля." };
     case "weak_password":
@@ -87,8 +88,8 @@ export default async function DashboardAccountPage({
   const passwordStatusMessage = getPasswordStatusMessage(passwordStatus);
   const supportTelegramUrl = env.NEXT_PUBLIC_SUPPORT_TELEGRAM_URL ?? DEFAULT_SUPPORT_TELEGRAM_URL;
 
-  const [user, publicId] = await Promise.all([
-    db.user.findUnique({
+  const publicId = session.user.publicId;
+  const user = await db.user.findUnique({
       where: { id: session.user.id },
       select: {
         id: true,
@@ -100,9 +101,7 @@ export default async function DashboardAccountPage({
         telegramBotConfirmedAt: true,
         isEmailPlaceholder: true,
       },
-    }),
-    ensureUserPublicId(session.user.id),
-  ]);
+  });
 
   if (!user) return null;
 

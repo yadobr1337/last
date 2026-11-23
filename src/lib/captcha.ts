@@ -20,6 +20,8 @@ export async function verifyCaptchaToken(token?: string | null) {
     },
     body,
     cache: "no-store",
+    redirect: "error",
+    signal: AbortSignal.timeout(5_000),
   });
 
   if (!response.ok) {

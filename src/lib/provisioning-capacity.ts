@@ -1,7 +1,7 @@
 import "server-only";
 
 import { Prisma } from "@prisma/client";
-import { db } from "@/lib/db";
+import { db, writeTransaction } from "@/lib/db";
 import { env } from "@/lib/env";
 import { DEFAULT_SQUAD_MEMBER_LIMIT } from "@/lib/site";
 import { slugify } from "@/lib/utils";
@@ -161,6 +161,9 @@ export function getMissingProductionConfig(config: ProvisioningConfig = getProvi
 
   const required: Array<[string, string | number | undefined]> = [
     ["AEZA_API_TOKEN", env.AEZA_API_TOKEN],
+    ["AEZA_ORDER_CURRENCY", env.AEZA_ORDER_CURRENCY],
+    ["AEZA_MAX_DAILY_SPEND_MINOR", env.AEZA_MAX_DAILY_SPEND_MINOR],
+    ["AEZA_MAX_DAILY_ORDERS", env.AEZA_MAX_DAILY_ORDERS],
     ["TIMEWEB_CLOUD_TOKEN", env.TIMEWEB_CLOUD_TOKEN],
     ["REMNAWAVE_BASE_URL", env.REMNAWAVE_BASE_URL],
     ["REMNAWAVE_API_TOKEN", env.REMNAWAVE_API_TOKEN],
@@ -341,10 +344,9 @@ export async function createProvisioningSquadForCapacity(
 }
 
 export async function ensureProvisioningCapacity(config: ProvisioningConfig) {
-  if (await hasAvailableSquad()) {
-    return 0;
-  }
-
-  const created = await createProvisioningSquadForCapacity(db);
-  return created ? config.nodesPerSquad : 0;
+  return writeTransaction(async (tx) => {
+    if (await hasAvailableSquad(tx)) return 0;
+    const created = await createProvisioningSquadForCapacity(tx);
+    return created ? config.nodesPerSquad : 0;
+  });
 }

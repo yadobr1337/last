@@ -1,34 +1,16 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { buildPasswordResetIdentifier, issueEmailCode } from "@/lib/email-codes";
 
 const schema = z.object({
-  email: z.string().email(),
+  email: z.string().trim().max(254).email(),
 });
 
-function mapMailError(error: unknown) {
-  const message = error instanceof Error ? error.message : "";
-
-  if (message.includes("SMTP is not configured")) {
-    return "Не удалось отправить код. Попробуйте позже.";
-  }
-
-  if (
-    message.includes("Invalid login") ||
-    message.includes("535") ||
-    message.includes("Username and Password not accepted") ||
-    message.toLowerCase().includes("auth")
-  ) {
-    return "Не удалось отправить код. Попробуйте позже.";
-  }
-
-  return "Не удалось отправить код. Попробуйте позже.";
-}
-
 export async function POST(request: Request) {
-  const payload = schema.parse(await request.json());
-  const email = payload.email.toLowerCase();
+  const input = schema.safeParse(await request.json().catch(() => null));
+  if (!input.success) return NextResponse.json({ error: "Проверьте email." }, { status: 400 });
+  const email = input.data.email.toLowerCase();
 
   const user = await db.user.findUnique({
     where: { email },
@@ -36,30 +18,20 @@ export async function POST(request: Request) {
       isEmailPlaceholder: true,
       emailVerified: true,
       passwordHash: true,
+      isBanned: true,
     },
   });
 
-  if (!user || user.isEmailPlaceholder || !user.passwordHash) {
-    return NextResponse.json({ error: "Аккаунт с таким email не найден." }, { status: 404 });
-  }
-
-  if (!user.emailVerified) {
-    return NextResponse.json(
-      { error: "Сначала подтвердите email в настройках аккаунта." },
-      { status: 400 },
-    );
-  }
-
-  try {
-    await issueEmailCode({
-      identifier: buildPasswordResetIdentifier(email),
-      email,
-      subject: "1VPN: код для сброса пароля",
-      title: "Сброс пароля",
-      description: "Введите этот код на странице входа и задайте новый пароль для аккаунта.",
+  if (user?.emailVerified && !user.isEmailPlaceholder && user.passwordHash && !user.isBanned) {
+    after(async () => {
+      await issueEmailCode({
+        identifier: buildPasswordResetIdentifier(email),
+        email,
+        subject: "1VPN: код для сброса пароля",
+        title: "Сброс пароля",
+        description: "Введите этот код на странице входа и задайте новый пароль для аккаунта.",
+      }).catch(() => undefined);
     });
-  } catch (error) {
-    return NextResponse.json({ error: mapMailError(error) }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true });

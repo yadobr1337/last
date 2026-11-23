@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { TelegramLogin } from "@/components/auth/telegram-login";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 
 export function LoginForm() {
+  const router = useRouter();
   const [resetMode, setResetMode] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,12 +36,13 @@ export function LoginForm() {
                 callbackUrl: "/dashboard",
               });
 
-              if (result?.error) {
+              if (!result?.ok || result.error) {
                 setError("Неверный email или пароль.");
                 return;
               }
 
-              window.location.href = "/dashboard";
+              router.replace("/dashboard");
+              router.refresh();
             });
           }}
         >

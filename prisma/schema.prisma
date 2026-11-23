@@ -43,6 +43,7 @@ model User {
   publicId          String?            @unique
   email             String             @unique
   passwordHash      String?
+  authVersion       Int                @default(0)
   emailVerified     DateTime?
   pendingEmail      String?
   passwordlessEnabled Boolean          @default(false)
@@ -55,6 +56,7 @@ model User {
   telegramBotConfirmedAt DateTime?
   balanceKopeks     Int                @default(0)
   billingCarryMicros BigInt            @default(0)
+  billingRemainder   BigInt            @default(0)
   billingStartedAt  DateTime?
   lastBillingAt     DateTime?
   billingCycle      Int                @default(0)
@@ -67,8 +69,11 @@ model User {
   vpnProvisionState VpnProvisionState  @default(PENDING)
   vpnStatusMessage  String?
   remnawaveUserUuid String?            @unique
+  remnawaveUsername String?
   remnawaveShortUuid String?           @unique
   subscriptionUrl   String?
+  vpnSyncAt         DateTime?
+  vpnSyncRevision   Int                @default(0)
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
   squadId           String?
@@ -79,6 +84,9 @@ model User {
   payments      Payment[]
   accounts      Account[]
   sessions      Session[]
+
+  @@index([vpnSyncAt, id])
+  @@index([isBanned, lastBillingAt])
 }
 
 model Payment {
@@ -130,6 +138,8 @@ model ProvisioningJob {
   productId                  String
   status                     String   @default("PENDING")
   orderId                    String?
+  orderAttemptedAt           DateTime?
+  quotedCostMinor            Int?
   serverId                   String?
   serverIp                   String?
   remnawaveConfigProfileUuid String?
@@ -145,6 +155,7 @@ model ProvisioningJob {
 
   @@index([status, updatedAt])
   @@index([groupKey])
+  @@index([orderAttemptedAt])
 }
 
 model BalanceTransaction {
@@ -168,12 +179,43 @@ model NotificationEvent {
   cycleKey  String
   success   Boolean          @default(false)
   message   String?
+  deliveryText String?
+  attempts  Int              @default(0)
+  nextAttemptAt DateTime?
   createdAt DateTime         @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, type, cycleKey])
   @@index([userId, createdAt])
+  @@index([nextAttemptAt])
+}
+
+model WorkLease {
+  key       String   @id
+  owner     String
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
+
+model RateLimit {
+  key       String   @id
+  count     Int
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
+
+model AdminAuditEvent {
+  id        String   @id @default(cuid())
+  actor     String
+  action    String
+  target    String?
+  details   Json?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }
 
 model SystemSettings {

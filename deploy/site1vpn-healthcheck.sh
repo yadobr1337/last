@@ -28,7 +28,6 @@ check_https() {
     --silent \
     --show-error \
     --max-time 15 \
-    --insecure \
     --resolve the1vpn.ru:443:127.0.0.1 \
     --output /dev/null \
     "$HTTPS_HEALTH_URL"
@@ -49,16 +48,14 @@ fi
 if ! systemctl is-active --quiet nginx.service; then
   snapshot
   log "nginx.service is inactive; restarting it"
-  nginx -t
-  systemctl restart nginx.service
+  nginx -t && systemctl restart nginx.service || exit 1
   sleep 2
 fi
 
 if ! check_https; then
   snapshot
   log "Local HTTPS proxy check failed; restarting nginx.service"
-  nginx -t
-  systemctl restart nginx.service
+  nginx -t && systemctl restart nginx.service || exit 1
   sleep 2
 
   if ! check_https; then

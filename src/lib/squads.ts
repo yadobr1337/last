@@ -1,5 +1,5 @@
 import { Prisma, type Squad } from "@prisma/client";
-import { db } from "@/lib/db";
+import { db, writeTransaction } from "@/lib/db";
 import { DEFAULT_SQUAD_MEMBER_LIMIT } from "@/lib/site";
 import { slugify } from "@/lib/utils";
 
@@ -70,17 +70,21 @@ export async function createSquad(input: {
   name?: string;
   memberLimit: number;
   remnawaveInternalSquadUuid: string;
+  actor: string;
 }) {
   const name = buildSquadName(input.remnawaveInternalSquadUuid, input.name);
-
-  return db.squad.create({
-    data: {
-      name,
-      slug: slugify(`${name}-${input.remnawaveInternalSquadUuid.slice(0, 8)}`),
-      memberLimit: input.memberLimit,
-      position: (await db.squad.count()) + 1,
-      remnawaveInternalSquadUuid: input.remnawaveInternalSquadUuid,
-    },
+  return writeTransaction(async (tx) => {
+    const squad = await tx.squad.create({
+      data: {
+        name,
+        slug: slugify(`${name}-${input.remnawaveInternalSquadUuid.slice(0, 8)}`),
+        memberLimit: input.memberLimit,
+        position: (await tx.squad.count()) + 1,
+        remnawaveInternalSquadUuid: input.remnawaveInternalSquadUuid,
+      },
+    });
+    await tx.adminAuditEvent.create({ data: { actor: input.actor, action: "CREATE_SQUAD", target: squad.id } });
+    return squad;
   });
 }
 
@@ -105,37 +109,39 @@ export async function updateSquad(input: {
   memberLimit: number;
   isActive: boolean;
   remnawaveInternalSquadUuid: string;
+  actor: string;
 }) {
   const name = buildSquadName(input.remnawaveInternalSquadUuid, input.name);
-
-  return db.squad.update({
-    where: { id: input.squadId },
-    data: {
-      name,
-      slug: slugify(`${name}-${input.remnawaveInternalSquadUuid.slice(0, 8)}`),
-      memberLimit: input.memberLimit,
-      isActive: input.isActive,
-      remnawaveInternalSquadUuid: input.remnawaveInternalSquadUuid,
-    },
+  return writeTransaction(async (tx) => {
+    const squad = await tx.squad.update({
+      where: { id: input.squadId },
+      data: {
+        name,
+        slug: slugify(`${name}-${input.remnawaveInternalSquadUuid.slice(0, 8)}`),
+        memberLimit: input.memberLimit,
+        isActive: input.isActive,
+        remnawaveInternalSquadUuid: input.remnawaveInternalSquadUuid,
+      },
+    });
+    await tx.user.updateMany({
+      where: { squadId: squad.id, balanceKopeks: { gt: 0 } },
+      data: { vpnSyncAt: new Date(), vpnSyncRevision: { increment: 1 } },
+    });
+    await tx.adminAuditEvent.create({ data: { actor: input.actor, action: "UPDATE_SQUAD", target: squad.id } });
+    return squad;
   });
 }
 
-export async function deleteSquad(squadId: string) {
-  const squad = await db.squad.findUnique({
-    where: { id: squadId },
-  });
-
-  if (!squad) {
-    throw new Error("Squad not found.");
-  }
-
-  await db.$transaction([
-    db.user.updateMany({
+export async function deleteSquad(squadId: string, actor: string) {
+  await writeTransaction(async (tx) => {
+    await tx.user.updateMany({
       where: { squadId },
-      data: { squadId: null },
-    }),
-    db.squad.delete({ where: { id: squadId } }),
-  ]);
+      data: { squadId: null, vpnSyncAt: new Date(), vpnSyncRevision: { increment: 1 } },
+    });
+    await tx.provisioningJob.updateMany({ where: { squadId }, data: { squadId: null } });
+    await tx.squad.delete({ where: { id: squadId } });
+    await tx.adminAuditEvent.create({ data: { actor, action: "DELETE_SQUAD", target: squadId } });
+  });
 }
 
 export type SquadWithUsage = Squad & {

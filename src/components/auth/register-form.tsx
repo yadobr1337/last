@@ -2,6 +2,7 @@
 
 import { useCallback, useState, useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { HCaptchaWidget } from "@/components/auth/hcaptcha-widget";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 
 export function RegisterForm({ captchaEnabled }: { captchaEnabled: boolean }) {
+  const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [captchaToken, setCaptchaToken] = useState("");
@@ -63,8 +65,8 @@ export function RegisterForm({ captchaEnabled }: { captchaEnabled: boolean }) {
             callbackUrl: "/dashboard",
           });
 
-          if (result?.error) {
-            setError(result.error);
+          if (!result?.ok || result.error) {
+            setError("Аккаунт создан. Войдите с указанным email и паролем.");
             return;
           }
 
@@ -73,7 +75,8 @@ export function RegisterForm({ captchaEnabled }: { captchaEnabled: boolean }) {
               ? "Аккаунт создан. Код подтверждения email уже отправлен."
               : "Аккаунт создан. Подтверждение email можно будет выполнить позже.",
           );
-          window.location.href = "/dashboard";
+          router.replace("/dashboard");
+          router.refresh();
         });
       }}
     >

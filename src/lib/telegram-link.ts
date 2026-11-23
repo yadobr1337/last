@@ -1,7 +1,7 @@
 import "server-only";
 
 import crypto from "node:crypto";
-import { db } from "@/lib/db";
+import { db, writeTransaction } from "@/lib/db";
 
 const TELEGRAM_LINK_PREFIX = "telegram-link:";
 const TELEGRAM_LINK_TTL_MS = 15 * 60 * 1000;
@@ -14,18 +14,18 @@ export async function issueTelegramLinkToken(userId: string) {
   const identifier = `${TELEGRAM_LINK_PREFIX}${userId}`;
   const token = crypto.randomBytes(24).toString("base64url");
 
-  await db.$transaction([
-    db.verificationToken.deleteMany({
+  await writeTransaction(async (tx) => {
+    await tx.verificationToken.deleteMany({
       where: { identifier },
-    }),
-    db.verificationToken.create({
+    });
+    await tx.verificationToken.create({
       data: {
         identifier,
         token: hashToken(token),
         expires: new Date(Date.now() + TELEGRAM_LINK_TTL_MS),
       },
-    }),
-  ]);
+    });
+  });
 
   return token;
 }
@@ -40,9 +40,6 @@ export async function consumeTelegramLinkToken(token: string) {
     !stored.identifier.startsWith(TELEGRAM_LINK_PREFIX) ||
     stored.expires <= new Date()
   ) {
-    if (stored) {
-      await db.verificationToken.delete({ where: { token: stored.token } });
-    }
     return null;
   }
 

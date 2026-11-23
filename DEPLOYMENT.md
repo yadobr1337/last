@@ -154,11 +154,13 @@ changing them.
 For a migration with the old production database, do not run `prisma:seed`
 unless the administrator credentials in `.env` should overwrite the existing
 admin login.
+Before running the commands below against an existing database, follow the
+[baseline and backup procedure](DEPLOYMENT_CHECKLIST.md).
 
 ```bash
 cd /var/www/site1vpn
 sudo -u site1vpn npm ci
-sudo -u site1vpn npm run prisma:push
+sudo -u site1vpn npm run prisma:deploy
 sudo -u site1vpn npm run build
 
 install -d -o site1vpn -g site1vpn /var/www/site1vpn/runtime
@@ -342,13 +344,17 @@ has been tested.
 
 ## Updating Later
 
+Prepare and verify a SQLite backup and stage the release with a copy of the
+database first. Follow [DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md) for
+the initial baseline, reconciliation and rollback.
+
 ```bash
 cd /var/www/site1vpn
 systemctl stop site1vpn-healthcheck.timer site1vpn
 
 sudo -u site1vpn git pull --ff-only
 sudo -u site1vpn npm ci
-sudo -u site1vpn npm run prisma:push
+sudo -u site1vpn npm run prisma:deploy
 sudo -u site1vpn npm run build
 sudo -u site1vpn ./deploy/publish-static-home.sh
 
@@ -388,14 +394,20 @@ bulk subscription grants can finish without Nginx closing the request.
 
 ## Backups and Logs
 
-Create a private backup:
+Use SQLite's online backup command so that the backup contains committed data
+from WAL as well as the main database:
 
 ```bash
-systemctl stop site1vpn
-tar -C /var/www/site1vpn -czf /root/site1vpn-$(date +%F).tar.gz \
-  .env prisma/production.db
-systemctl start site1vpn
+umask 077
+backup="/root/site1vpn-$(date -u +%Y%m%dT%H%M%SZ).db"
+sqlite3 /var/www/site1vpn/prisma/production.db ".backup '$backup'"
+test "$(sqlite3 "$backup" 'PRAGMA integrity_check;')" = ok
 ```
+
+Store database and environment backups separately with restricted access and
+encryption. Test restoring to an isolated directory and run `PRAGMA foreign_key_check;`
+against the restored file. Use the active `DATABASE_URL` path if it differs from
+the example.
 
 Inspect failures:
 

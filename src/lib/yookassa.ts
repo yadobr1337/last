@@ -1,36 +1,35 @@
 import "server-only";
 
 import crypto from "node:crypto";
-import { db } from "@/lib/db";
+import { z } from "zod";
+import { db, writeTransaction } from "@/lib/db";
 import { env } from "@/lib/env";
-import { topUpBalance } from "@/lib/billing";
+import { creditBalance } from "@/lib/billing";
+import { MAX_BALANCE_KOPEKS, parseRubleAmount } from "@/lib/money";
 
 export type YooKassaPaymentMethod = "bank_card" | "sbp";
 
-type YooKassaPayment = {
-  id: string;
-  status: "pending" | "waiting_for_capture" | "succeeded" | "canceled";
-  paid: boolean;
-  amount: {
-    value: string;
-    currency: string;
-  };
-  confirmation?: {
-    type: string;
-    confirmation_url?: string;
-  };
-  metadata?: {
-    localPaymentId?: string;
-    userId?: string;
-  };
-};
+export const yooKassaPaymentId = z.string().regex(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i);
+const paymentSchema = z.object({
+  id: yooKassaPaymentId,
+  status: z.enum(["pending", "waiting_for_capture", "succeeded", "canceled"]),
+  paid: z.boolean(),
+  test: z.boolean(),
+  amount: z.object({ value: z.string().regex(/^\d{1,9}\.\d{2}$/), currency: z.literal("RUB") }),
+  recipient: z.object({ account_id: z.string() }),
+  confirmation: z.object({ confirmation_url: z.url().optional() }).optional(),
+  metadata: z.object({ localPaymentId: z.string().min(1).max(64), userId: z.string().min(1).max(64) }).optional(),
+});
+type YooKassaPayment = z.infer<typeof paymentSchema>;
 
 function isConfigured() {
-  return Boolean(env.YOOKASSA_SHOP_ID && env.YOOKASSA_SECRET_KEY);
+  const key = env.YOOKASSA_SECRET_KEY;
+  return Boolean(env.YOOKASSA_SHOP_ID?.match(/^\d+$/) && key?.trim() &&
+    (process.env.NODE_ENV !== "production" || key.startsWith("live_")));
 }
 
 function getAuthHeader() {
-  if (!env.YOOKASSA_SHOP_ID || !env.YOOKASSA_SECRET_KEY) {
+  if (!isConfigured()) {
     throw new Error("YooKassa is not configured.");
   }
 
@@ -45,11 +44,7 @@ function kopeksToRubles(amountKopeks: number) {
   return (amountKopeks / 100).toFixed(2);
 }
 
-function rublesToKopeks(value: string) {
-  return Math.round(Number(value) * 100);
-}
-
-async function requestYooKassa<T>(path: string, init?: RequestInit) {
+async function requestYooKassa(path: string, init?: RequestInit) {
   const response = await fetch(`https://api.yookassa.ru/v3${path}`, {
     ...init,
     headers: {
@@ -58,14 +53,15 @@ async function requestYooKassa<T>(path: string, init?: RequestInit) {
       ...(init?.headers ?? {}),
     },
     cache: "no-store",
+    redirect: "error",
+    signal: AbortSignal.timeout(8_000),
   });
 
   if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`YooKassa request failed: ${response.status} ${body.slice(0, 500)}`);
+    throw new Error(`YooKassa request failed: HTTP ${response.status}`);
   }
 
-  return (await response.json()) as T;
+  return paymentSchema.parse(await response.json());
 }
 
 export function canUseYooKassa() {
@@ -81,8 +77,13 @@ export async function createYooKassaPayment(params: {
     throw new Error("YooKassa is not configured.");
   }
 
-  if (params.amountKopeks < 1_000) {
-    throw new Error("Payment amount is too small.");
+  if (!Number.isInteger(params.amountKopeks) || params.amountKopeks < 1_000 ||
+      params.amountKopeks > MAX_BALANCE_KOPEKS) {
+    throw new Error("Payment amount is out of range.");
+  }
+  const returnUrl = new URL(getReturnUrl());
+  if (process.env.NODE_ENV === "production" && returnUrl.protocol !== "https:") {
+    throw new Error("YooKassa return URL must use HTTPS.");
   }
 
   const localPayment = await db.payment.create({
@@ -94,7 +95,7 @@ export async function createYooKassaPayment(params: {
     },
   });
 
-  const payment = await requestYooKassa<YooKassaPayment>("/payments", {
+  const payment = await requestYooKassa("/payments", {
     method: "POST",
     headers: {
       "Idempotence-Key": localPayment.id,
@@ -110,7 +111,7 @@ export async function createYooKassaPayment(params: {
       },
       confirmation: {
         type: "redirect",
-        return_url: getReturnUrl(),
+        return_url: returnUrl.href,
       },
       description: `1VPN: пополнение баланса на ${kopeksToRubles(params.amountKopeks)} RUB`,
       metadata: {
@@ -120,98 +121,101 @@ export async function createYooKassaPayment(params: {
     }),
   });
 
-  await db.payment.update({
-    where: { id: localPayment.id },
-    data: {
-      providerPaymentId: payment.id,
-      status: payment.status.toUpperCase(),
-      confirmationUrl: payment.confirmation?.confirmation_url ?? null,
-      providerPayload: payment,
-    },
-  });
-
-  if (!payment.confirmation?.confirmation_url) {
+  if (payment.metadata?.localPaymentId !== localPayment.id) {
+    throw new Error("YooKassa returned a different local order.");
+  }
+  await applyYooKassaPayment(payment);
+  if (payment.status === "succeeded") return returnUrl.href;
+  const confirmationUrl = payment.confirmation?.confirmation_url;
+  if (!confirmationUrl || new URL(confirmationUrl).protocol !== "https:") {
     throw new Error("YooKassa did not return a confirmation URL.");
   }
 
-  return payment.confirmation.confirmation_url;
+  return confirmationUrl;
 }
 
 export async function fetchYooKassaPayment(paymentId: string) {
-  return requestYooKassa<YooKassaPayment>(`/payments/${paymentId}`);
+  const id = yooKassaPaymentId.parse(paymentId);
+  const payment = await requestYooKassa(`/payments/${id}`);
+  if (payment.id !== id) throw new Error("YooKassa returned a different payment ID.");
+  return payment;
 }
 
 export async function applyYooKassaPayment(payment: YooKassaPayment) {
-  const paymentLookup = payment.metadata?.localPaymentId
-    ? {
-        OR: [
-          { providerPaymentId: payment.id },
-          { id: payment.metadata.localPaymentId },
-        ],
-      }
-    : { providerPaymentId: payment.id };
-
-  const localPayment = await db.payment.findFirst({
-    where: paymentLookup,
-  });
-
-  if (!localPayment) {
-    throw new Error(`Local payment not found for YooKassa payment ${payment.id}.`);
+  payment = paymentSchema.parse(payment);
+  if (!isConfigured() || payment.recipient.account_id !== env.YOOKASSA_SHOP_ID ||
+      (process.env.NODE_ENV === "production" && payment.test)) {
+    throw new Error("Unexpected YooKassa shop or payment environment.");
+  }
+  const metadata = payment.metadata;
+  // A merchant may have payments belonging to other applications.
+  if (!metadata) return { credited: false };
+  const amountKopeks = parseRubleAmount(payment.amount.value);
+  const isPaid = payment.status === "succeeded" && payment.paid;
+  if (payment.status === "succeeded" && !isPaid) {
+    throw new Error("YooKassa payment status is inconsistent.");
   }
 
-  const amountKopeks = rublesToKopeks(payment.amount.value);
-  if (amountKopeks !== localPayment.amountKopeks || payment.amount.currency !== "RUB") {
-    throw new Error(`YooKassa payment amount mismatch for ${payment.id}.`);
-  }
+  return writeTransaction(async (tx) => {
+    const local = await tx.payment.findUnique({ where: { id: metadata.localPaymentId } });
+    if (!local || local.provider !== "yookassa" || local.userId !== metadata.userId ||
+        (local.providerPaymentId && local.providerPaymentId !== payment.id) ||
+        local.amountKopeks !== amountKopeks) {
+      throw new Error("YooKassa payment does not match the local order.");
+    }
+    if (local.creditedAt || (local.status === "CANCELED" && !isPaid)) {
+      return { credited: false };
+    }
 
-  if (payment.status === "canceled") {
-    await db.payment.update({
-      where: { id: localPayment.id },
-      data: {
-        providerPaymentId: payment.id,
-        status: "CANCELED",
-        providerPayload: payment,
-      },
-    });
-    return { credited: false };
-  }
-
-  if (payment.status !== "succeeded" || !payment.paid) {
-    await db.payment.update({
-      where: { id: localPayment.id },
+    const claimed = await tx.payment.updateMany({
+      where: { id: local.id, creditedAt: null },
       data: {
         providerPaymentId: payment.id,
         status: payment.status.toUpperCase(),
-        providerPayload: payment,
+        confirmationUrl: payment.confirmation?.confirmation_url,
+        providerPayload: { status: payment.status, paid: payment.paid, test: payment.test },
+        creditedAt: isPaid ? new Date() : undefined,
       },
     });
-    return { credited: false };
-  }
+    if (!claimed.count || !isPaid) return { credited: false };
 
-  const claimed = await db.payment.updateMany({
+    await creditBalance(tx, {
+      userId: local.userId,
+      amountKopeks,
+      description: `YooKassa payment ${payment.id}`,
+      notificationKey: `yookassa:${local.id}`,
+    });
+    return { credited: true };
+  });
+}
+
+export async function reconcileYooKassaPayments() {
+  if (!isConfigured()) return;
+  const orders = await db.payment.findMany({
     where: {
-      id: localPayment.id,
+      provider: "yookassa",
+      providerPaymentId: { not: null },
       creditedAt: null,
+      status: { in: ["PENDING", "WAITING_FOR_CAPTURE", "SUCCEEDED"] },
+      updatedAt: { lte: new Date(Date.now() - 10 * 60_000) },
     },
-    data: {
-      providerPaymentId: payment.id,
-      status: "SUCCEEDED",
-      providerPayload: payment,
-      creditedAt: new Date(),
-    },
+    select: { id: true, providerPaymentId: true, updatedAt: true },
+    orderBy: { updatedAt: "asc" },
+    take: 10,
   });
-
-  if (!claimed.count) {
-    return { credited: false };
+  for (const order of orders) {
+    if (!order.providerPaymentId) continue;
+    try {
+      await applyYooKassaPayment(await fetchYooKassaPayment(order.providerPaymentId));
+    } catch {
+      console.error("[yookassa] scheduled reconciliation failed", { orderId: order.id });
+    } finally {
+      await db.payment.updateMany({
+        where: { id: order.id, creditedAt: null, updatedAt: order.updatedAt },
+        data: { updatedAt: new Date() },
+      });
+    }
   }
-
-  await topUpBalance({
-    userId: localPayment.userId,
-    amountKopeks: localPayment.amountKopeks,
-    description: `YooKassa payment ${payment.id}`,
-  });
-
-  return { credited: true };
 }
 
 export function timingSafeEqual(value: string, expected: string) {

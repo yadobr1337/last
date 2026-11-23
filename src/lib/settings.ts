@@ -8,7 +8,8 @@ import {
 const SETTINGS_DEFAULTS_VERSION = 1;
 
 export async function getSettings(tx: Prisma.TransactionClient | typeof db = db) {
-  const settings = await tx.systemSettings.upsert({
+  const current = await tx.systemSettings.findUnique({ where: { id: "default" } });
+  const settings = current ?? await tx.systemSettings.upsert({
     where: { id: "default" },
     update: {},
     create: {

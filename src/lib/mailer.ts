@@ -1,7 +1,7 @@
 import "server-only";
 
-import nodemailer from "nodemailer";
-import SMTPTransport from "nodemailer/lib/smtp-transport";
+import nodemailer from "smtp-nodemailer";
+import type SMTPTransport from "nodemailer/lib/smtp-transport";
 import { env } from "@/lib/env";
 
 type SmtpFamily = 4 | 6 | undefined;
@@ -61,20 +61,11 @@ function getTransport(family: SmtpFamily) {
     throw new Error("SMTP is not configured.");
   }
 
-  console.info("[smtp] creating transport", {
-    host: env.SMTP_HOST,
-    connectHost: env.SMTP_CONNECT_HOST ?? env.SMTP_HOST,
-    port: env.SMTP_PORT,
-    secure: env.SMTP_SECURE === "true",
-    user: env.SMTP_USER ? `${env.SMTP_USER.slice(0, 3)}***` : null,
-    from: env.SMTP_FROM_EMAIL,
-    family: family ?? "auto",
-  });
-
   const options: SMTPTransport.Options & { family?: 4 | 6 } = {
     host: env.SMTP_CONNECT_HOST ?? env.SMTP_HOST,
     port: env.SMTP_PORT,
     secure: env.SMTP_SECURE === "true",
+    requireTLS: process.env.NODE_ENV === "production" && env.SMTP_SECURE !== "true",
     family: family as 4 | 6 | undefined,
     name: env.SMTP_HOST,
     tls: {
@@ -107,12 +98,9 @@ export async function sendEmail(params: {
     const transport = getTransport(family);
 
     try {
-      await transport.verify();
       await transport.sendMail({
-        from: env.SMTP_FROM_NAME
-          ? `"${env.SMTP_FROM_NAME}" <${env.SMTP_FROM_EMAIL}>`
-          : env.SMTP_FROM_EMAIL,
-        to: params.to,
+        from: { name: env.SMTP_FROM_NAME ?? "1VPN", address: env.SMTP_FROM_EMAIL! },
+        to: { name: "", address: params.to },
         subject: params.subject,
         html: params.html,
         text: params.text,
@@ -120,10 +108,14 @@ export async function sendEmail(params: {
       return;
     } catch (error) {
       lastError = error;
+      const details = getSmtpErrorDetails(error);
       console.error("[smtp] delivery attempt failed", {
         family: family ?? "auto",
-        ...getSmtpErrorDetails(error),
+        code: details.code,
+        command: details.command,
+        responseCode: details.responseCode,
       });
+      if (details.command !== "CONN") break;
     } finally {
       transport.close();
     }

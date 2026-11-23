@@ -1,3 +1,4 @@
+import Image from "next/image";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -79,7 +80,7 @@ const features = [
   },
   {
     title: "Полная приватность",
-    text: "Без логов и лишнего шума. Только твой трафик, закрытый канал и аккуратный личный кабинет.",
+    text: "Зашифрованное подключение и управление доступом из личного кабинета.",
     className: "feature-card feature-privacy",
     visual: (
       <div className="feature-privacy-visual" aria-hidden>
@@ -88,8 +89,6 @@ const features = [
     ),
   },
 ];
-
-export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
   const [session, settings] = await Promise.all([getAuthSession(), getSettings()]);
@@ -106,7 +105,7 @@ export default async function HomePage() {
 
   const offerUrl = env.NEXT_PUBLIC_OFFER_URL ?? DEFAULT_OFFER_URL;
   const privacyUrl = env.NEXT_PUBLIC_PRIVACY_URL ?? DEFAULT_PRIVACY_URL;
-  const supportTelegramUrl = env.NEXT_PUBLIC_SUPPORT_TELEGRAM_URL ?? DEFAULT_SUPPORT_TELEGRAM_URL;
+  const supportTelegramUrl = settings.supportTelegramUrl ?? env.NEXT_PUBLIC_SUPPORT_TELEGRAM_URL ?? DEFAULT_SUPPORT_TELEGRAM_URL;
 
   return (
     <main className="grid-overlay overflow-hidden">
@@ -204,8 +203,8 @@ export default async function HomePage() {
 
             <ScrollReveal>
               <PublicPricing
-                initialMonthlyPriceKopeks={settings.pricePerDayKopeks * PUBLIC_BILLING_MONTH_DAYS}
-                initialTrialDays={settings.trialDays}
+                monthlyPriceKopeks={settings.pricePerDayKopeks * PUBLIC_BILLING_MONTH_DAYS}
+                trialDays={settings.trialDays}
               />
             </ScrollReveal>
           </div>
@@ -220,17 +219,15 @@ export default async function HomePage() {
                     </p>
                   </div>
                   <div className="relative p-4 sm:p-6">
-                    {/* Pre-compressed to avoid first-request image optimization latency. */}
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
+                    <Image
                       src="/logo-main-mobile.jpg"
                       alt="1VPN logo"
                       width={1120}
                       height={611}
                       className="rounded-[18px] opacity-90 sm:rounded-[24px]"
-                      decoding="async"
-                      fetchPriority="low"
-                      loading="lazy"
+                      unoptimized
+                      fetchPriority="high"
+                      loading="eager"
                     />
                     <div className="pointer-events-none absolute inset-4 rounded-[18px] border border-white/10 sm:inset-6 sm:rounded-[24px]" />
                   </div>

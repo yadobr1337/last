@@ -6,26 +6,32 @@ import {
   type Squad,
   type User,
 } from "@prisma/client";
-import { db } from "@/lib/db";
+import { randomUUID } from "node:crypto";
+import { db, writeTransaction } from "@/lib/db";
+import { canUseDemoPayments, MAX_BALANCE_KOPEKS } from "@/lib/money";
 import { notifyUserOnce } from "@/lib/notifications";
 import { escapeTelegramHtml } from "@/lib/telegram";
 import {
+  buildRemoteUsername,
   deleteRemoteUser,
   disableRemoteUser,
   ensureRemoteSquad,
+  findRemoteUserByUsername,
   provisionRemoteUser,
 } from "@/lib/remnawave";
 import { getSettings } from "@/lib/settings";
 import { MS_IN_DAY, SUBSCRIPTION_DELETION_GRACE_HOURS } from "@/lib/site";
 import { ensureUserSquad } from "@/lib/squads";
+import { withWorkLease } from "@/lib/work-lease";
 
 type ManagedUser = User & {
   squad: Squad | null;
 };
 
-const lifecycleState = globalThis as typeof globalThis & {
-  __oneVpnLifecycleSweep?: Promise<void>;
-};
+const BILLING_INTERVAL_MS = 10 * 60_000;
+const DAY = BigInt(MS_IN_DAY);
+const MICROS = 1_000_000n;
+const KOPECK_UNITS = DAY * MICROS;
 
 function normalizeDeviceCount(deviceCount: number) {
   return Math.max(1, deviceCount);
@@ -43,19 +49,20 @@ function computeRemainingDays(
   return balanceKopeks / (pricePerDayKopeks * normalizeDeviceCount(deviceCount));
 }
 
-function computeRemainingMs(
-  balanceKopeks: number,
+function accruedUnits(user: Pick<User, "billingCarryMicros" | "billingRemainder">) {
+  return user.billingCarryMicros * DAY + user.billingRemainder;
+}
+
+function millisecondsUntilDepletion(
+  user: Pick<User, "balanceKopeks" | "billingCarryMicros" | "billingRemainder">,
   pricePerDayKopeks: number,
   deviceCount: number,
 ) {
-  if (balanceKopeks <= 0 || pricePerDayKopeks <= 0) {
-    return 0;
-  }
-
-  return Number(
-    (BigInt(balanceKopeks) * BigInt(MS_IN_DAY)) /
-      (BigInt(pricePerDayKopeks) * BigInt(normalizeDeviceCount(deviceCount))),
-  );
+  const unitsPerMs = BigInt(pricePerDayKopeks) * BigInt(deviceCount) * MICROS;
+  const remaining = BigInt(user.balanceKopeks) * KOPECK_UNITS - accruedUnits(user);
+  return remaining > 0n && unitsPerMs > 0n
+    ? Number((remaining + unitsPerMs - 1n) / unitsPerMs)
+    : 0;
 }
 
 function resolveHwidDeviceLimit(user: Pick<User, "hwidDeviceLimit">, defaultLimit: number) {
@@ -63,12 +70,12 @@ function resolveHwidDeviceLimit(user: Pick<User, "hwidDeviceLimit">, defaultLimi
 }
 
 function computeSubscriptionExpireAt(
-  user: Pick<User, "balanceKopeks" | "lastBillingAt" | "hwidDeviceLimit">,
+  user: Pick<User, "balanceKopeks" | "lastBillingAt" | "hwidDeviceLimit" | "billingCarryMicros" | "billingRemainder">,
   settings: { pricePerDayKopeks: number; defaultHwidDeviceLimit: number },
   now = new Date(),
 ) {
   const deviceCount = resolveHwidDeviceLimit(user, settings.defaultHwidDeviceLimit);
-  const remainingMs = computeRemainingMs(user.balanceKopeks, settings.pricePerDayKopeks, deviceCount);
+  const remainingMs = millisecondsUntilDepletion(user, settings.pricePerDayKopeks, deviceCount);
   const anchor = user.lastBillingAt ?? now;
 
   return new Date(anchor.getTime() + remainingMs);
@@ -83,10 +90,11 @@ async function fetchManagedUser(userId: string, tx: Prisma.TransactionClient = d
 
 export async function settleUserBilling(
   userId: string,
-  tx: Prisma.TransactionClient = db,
+  tx: Prisma.TransactionClient,
   now = new Date(),
+  currentSettings?: Awaited<ReturnType<typeof getSettings>>,
 ) {
-  const settings = await getSettings(tx);
+  const settings = currentSettings ?? await getSettings(tx);
   const existing = await fetchManagedUser(userId, tx);
 
   if (!existing) {
@@ -114,6 +122,7 @@ export async function settleUserBilling(
             now.getTime() + SUBSCRIPTION_DELETION_GRACE_HOURS * 3_600_000,
           ),
           vpnProvisionState: "DISABLED",
+          ...queueVpnSync(now),
         },
         include: { squad: true },
       });
@@ -137,6 +146,13 @@ export async function settleUserBilling(
     return user;
   }
 
+  if (!user.lastBillingAt && !user.billingStartedAt) {
+    return tx.user.update({
+      where: { id: user.id },
+      data: { billingStartedAt: now, lastBillingAt: now, ...queueVpnSync(now) },
+      include: { squad: true },
+    });
+  }
   const billingAnchor = user.lastBillingAt ?? user.billingStartedAt ?? now;
   const elapsedMs = Math.max(0, now.getTime() - billingAnchor.getTime());
   const deviceCount = resolveHwidDeviceLimit(user, settings.defaultHwidDeviceLimit);
@@ -145,33 +161,17 @@ export async function settleUserBilling(
     return user;
   }
 
-  const chargeMicros =
-    user.billingCarryMicros +
-    (BigInt(elapsedMs) *
-      BigInt(settings.pricePerDayKopeks) *
-      BigInt(deviceCount) *
-      1_000_000n) /
-      BigInt(MS_IN_DAY);
-  const debitKopeks = Number(chargeMicros / 1_000_000n);
-  const carryMicros = chargeMicros % 1_000_000n;
-
-  if (debitKopeks <= 0) {
-    return tx.user.update({
-      where: { id: user.id },
-      data: {
-        lastBillingAt: now,
-        billingCarryMicros: carryMicros,
-      },
-      include: { squad: true },
-    });
+  if (settings.pricePerDayKopeks <= 0) {
+    throw new Error("Daily price must be positive.");
   }
 
-  if (debitKopeks >= user.balanceKopeks) {
-    const lifetimeMicros = BigInt(user.balanceKopeks) * 1_000_000n + user.billingCarryMicros;
-    const msUntilDepleted = Number(
-      (lifetimeMicros * BigInt(MS_IN_DAY)) /
-        (BigInt(settings.pricePerDayKopeks) * BigInt(deviceCount) * 1_000_000n),
-    );
+  const charge = accruedUnits(user) +
+    BigInt(elapsedMs) * BigInt(settings.pricePerDayKopeks) * BigInt(deviceCount) * MICROS;
+  const debitKopeks = charge / KOPECK_UNITS;
+  const carry = charge % KOPECK_UNITS;
+
+  if (debitKopeks >= BigInt(user.balanceKopeks)) {
+    const msUntilDepleted = millisecondsUntilDepletion(user, settings.pricePerDayKopeks, deviceCount);
     const endedAt = new Date(billingAnchor.getTime() + msUntilDepleted);
 
     return tx.user.update({
@@ -179,12 +179,14 @@ export async function settleUserBilling(
       data: {
         balanceKopeks: 0,
         billingCarryMicros: 0,
+        billingRemainder: 0,
         lastBillingAt: endedAt,
         subscriptionEndedAt: endedAt,
         removalScheduledAt: new Date(
           endedAt.getTime() + SUBSCRIPTION_DELETION_GRACE_HOURS * 3_600_000,
         ),
         vpnProvisionState: "DISABLED",
+        ...queueVpnSync(now),
         transactions: {
           create: {
             type: TransactionType.BILLING_DEBIT,
@@ -200,21 +202,24 @@ export async function settleUserBilling(
   return tx.user.update({
     where: { id: user.id },
     data: {
-      balanceKopeks: {
-        decrement: debitKopeks,
-      },
-      billingCarryMicros: carryMicros,
+      balanceKopeks: { decrement: Number(debitKopeks) },
+      billingCarryMicros: carry / DAY,
+      billingRemainder: carry % DAY,
       lastBillingAt: now,
-      transactions: {
+      transactions: debitKopeks === 0n ? undefined : {
         create: {
           type: TransactionType.BILLING_DEBIT,
-          amountKopeks: -debitKopeks,
+          amountKopeks: -Number(debitKopeks),
           description: "Automatic daily billing",
         },
       },
     },
     include: { squad: true },
   });
+}
+
+export function queueVpnSync(at = new Date()) {
+  return { vpnSyncAt: at, vpnSyncRevision: { increment: 1 } };
 }
 
 async function activateSubscription(params: {
@@ -224,8 +229,19 @@ async function activateSubscription(params: {
   type: TransactionType;
   description: string;
   markTrial?: boolean;
+  actor?: string;
+  now?: Date;
+  ledgerId?: string;
 }) {
-  const now = new Date();
+  if (
+    !Number.isInteger(params.amountKopeks) ||
+    params.amountKopeks <= 0 ||
+    params.amountKopeks > MAX_BALANCE_KOPEKS - params.user.balanceKopeks
+  ) {
+    throw new Error("Пополнение превышает допустимый диапазон баланса.");
+  }
+
+  const now = params.now ?? new Date();
   const isReactivation = params.user.balanceKopeks <= 0;
 
   return params.tx.user.update({
@@ -235,17 +251,21 @@ async function activateSubscription(params: {
         increment: params.amountKopeks,
       },
       billingCarryMicros: isReactivation ? 0 : params.user.billingCarryMicros,
+      billingRemainder: isReactivation ? 0 : params.user.billingRemainder,
       billingStartedAt: isReactivation ? now : params.user.billingStartedAt ?? now,
       lastBillingAt: isReactivation ? now : params.user.lastBillingAt ?? now,
       billingCycle: isReactivation ? { increment: 1 } : undefined,
       subscriptionEndedAt: null,
       removalScheduledAt: null,
       trialClaimedAt: params.markTrial ? now : undefined,
+      ...queueVpnSync(now),
       transactions: {
         create: {
+          id: params.ledgerId,
           type: params.type,
           amountKopeks: params.amountKopeks,
           description: params.description,
+          metadata: params.actor ? { actor: params.actor } : undefined,
         },
       },
     },
@@ -253,44 +273,91 @@ async function activateSubscription(params: {
   });
 }
 
-export async function topUpBalance(params: {
+export async function creditBalance(tx: Prisma.TransactionClient, params: {
   userId: string;
   amountKopeks: number;
   description: string;
-  type?: TransactionType;
+  notificationKey: string;
 }) {
-  if (params.amountKopeks <= 0) {
-    throw new Error("Top-up amount must be positive.");
-  }
-
-  const user = await db.$transaction(
-    async (tx) => {
-      const settled = await settleUserBilling(params.userId, tx);
-      return activateSubscription({
-        tx,
-        user: settled,
-        amountKopeks: params.amountKopeks,
-        type: params.type ?? TransactionType.TOPUP,
-        description: params.description,
-      });
-    },
-    { timeout: 15_000, maxWait: 10_000 },
-  );
-
-  await syncUserLifecycle(user.id);
-
-  await notifyUserOnce({
-    user,
-    type: NotificationType.TOPUP,
-    cycleKey: `${user.billingCycle}:${user.updatedAt.toISOString()}`,
-    message: `<b>1VPN</b>\nБаланс пополнен на <b>${(params.amountKopeks / 100).toFixed(2)} RUB</b>.\nТекущий баланс: <b>${(user.balanceKopeks / 100).toFixed(2)} RUB</b>.`,
+  const now = new Date();
+  const settled = await settleUserBilling(params.userId, tx, now);
+  const user = await activateSubscription({
+    tx,
+    user: settled,
+    amountKopeks: params.amountKopeks,
+    type: TransactionType.TOPUP,
+    description: params.description,
+    now,
   });
-
+  if (user.telegramId) {
+    await tx.notificationEvent.create({
+      data: {
+        userId: user.id,
+        type: NotificationType.TOPUP,
+        cycleKey: params.notificationKey,
+        nextAttemptAt: now,
+        deliveryText: `<b>1VPN</b>\nБаланс пополнен на <b>${(params.amountKopeks / 100).toFixed(2)} RUB</b>.`,
+      },
+    });
+  }
   return user;
 }
 
+export async function topUpBalance(params: { userId: string; amountKopeks: number; description: string }) {
+  if (!canUseDemoPayments()) throw new Error("Demo payments are disabled.");
+  const notificationKey = `demo:${randomUUID()}`;
+  return writeTransaction((tx) => creditBalance(tx, { ...params, notificationKey }));
+}
+
+export async function changeDeviceLimit(userId: string, hwidDeviceLimit: number | null, actor?: string) {
+  if (hwidDeviceLimit !== null && (!Number.isInteger(hwidDeviceLimit) || hwidDeviceLimit < 1 || hwidDeviceLimit > 100)) {
+    throw new Error("Допустимо от 1 до 100 устройств.");
+  }
+  await writeTransaction(async (tx) => {
+    const now = new Date();
+    await settleUserBilling(userId, tx, now);
+    await tx.user.update({
+      where: { id: userId },
+      data: { hwidDeviceLimit, ...queueVpnSync(now) },
+    });
+    if (actor) {
+      await tx.adminAuditEvent.create({
+        data: { actor, target: userId, action: "DEVICE_LIMIT", details: { hwidDeviceLimit } },
+      });
+    }
+  });
+  await tryImmediateVpnSync(userId);
+}
+
+export async function changeBillingSettings(data: Prisma.SystemSettingsUpdateInput, actor: string) {
+  await writeTransaction(async (tx) => {
+    const now = new Date();
+    const settings = await getSettings(tx);
+    if (data.pricePerDayKopeks !== settings.pricePerDayKopeks ||
+        data.defaultHwidDeviceLimit !== settings.defaultHwidDeviceLimit) {
+      const affected = { balanceKopeks: { gt: 0 } };
+      const users = await tx.user.findMany({ where: affected, select: { id: true } });
+      for (const { id } of users) {
+        await settleUserBilling(id, tx, now, settings);
+      }
+      await tx.user.updateMany({ where: affected, data: queueVpnSync(now) });
+    }
+    await tx.systemSettings.update({ where: { id: settings.id }, data });
+    await tx.adminAuditEvent.create({
+      data: {
+        actor,
+        action: "BILLING_SETTINGS",
+        details: {
+          pricePerDayKopeks: typeof data.pricePerDayKopeks === "number" ? data.pricePerDayKopeks : null,
+          defaultHwidDeviceLimit: typeof data.defaultHwidDeviceLimit === "number" ? data.defaultHwidDeviceLimit : null,
+        },
+      },
+    });
+  });
+}
+
 export async function claimTrialDay(userId: string) {
-  const user = await db.$transaction(
+  const user = await writeTransaction(
     async (tx) => {
       const settings = await getSettings(tx);
       const settled = await settleUserBilling(userId, tx);
@@ -302,6 +369,9 @@ export async function claimTrialDay(userId: string) {
       if (settled.trialClaimedAt) {
         throw new Error("Trial has already been claimed.");
       }
+      if (settled.isBanned || !settled.telegramBotConfirmedAt) {
+        throw new Error("Сначала подтвердите привязку Telegram.");
+      }
 
       return activateSubscription({
         tx,
@@ -312,10 +382,9 @@ export async function claimTrialDay(userId: string) {
         markTrial: true,
       });
     },
-    { timeout: 15_000, maxWait: 10_000 },
   );
 
-  await syncUserLifecycle(user.id);
+  await tryImmediateVpnSync(user.id);
   return user;
 }
 
@@ -323,14 +392,23 @@ export async function adjustBalanceByAdmin(params: {
   userId: string;
   amountKopeks: number;
   description: string;
+  actor: string;
 }) {
   if (params.amountKopeks === 0) {
     throw new Error("Adjustment amount must not be zero.");
   }
 
-  const user = await db.$transaction(
+  const user = await writeTransaction(
     async (tx) => {
       const settled = await settleUserBilling(params.userId, tx);
+      await tx.adminAuditEvent.create({
+        data: {
+          actor: params.actor,
+          action: "ADJUST_BALANCE",
+          target: params.userId,
+          details: { requestedKopeks: params.amountKopeks },
+        },
+      });
 
       if (params.amountKopeks > 0) {
         return activateSubscription({
@@ -339,6 +417,7 @@ export async function adjustBalanceByAdmin(params: {
           amountKopeks: params.amountKopeks,
           type: TransactionType.ADMIN_ADJUSTMENT,
           description: params.description,
+          actor: params.actor,
         });
       }
 
@@ -354,6 +433,8 @@ export async function adjustBalanceByAdmin(params: {
         data: {
           balanceKopeks: nextBalance,
           billingCarryMicros: nextBalance === 0 ? 0 : settled.billingCarryMicros,
+          billingRemainder: nextBalance === 0 ? 0 : settled.billingRemainder,
+          ...queueVpnSync(),
           lastBillingAt: new Date(),
           subscriptionEndedAt: nextBalance === 0 ? new Date() : null,
           removalScheduledAt:
@@ -365,16 +446,16 @@ export async function adjustBalanceByAdmin(params: {
               type: TransactionType.ADMIN_ADJUSTMENT,
               amountKopeks: actualAdjustment,
               description: params.description,
+              metadata: { actor: params.actor },
             },
           },
         },
         include: { squad: true },
       });
     },
-    { timeout: 15_000, maxWait: 10_000 },
   );
 
-  await syncUserLifecycle(user.id);
+  await tryImmediateVpnSync(user.id);
 
   if (params.amountKopeks > 0) {
     await notifyUserOnce({
@@ -382,7 +463,7 @@ export async function adjustBalanceByAdmin(params: {
       type: NotificationType.TOPUP,
       cycleKey: `${user.billingCycle}:admin:${user.updatedAt.toISOString()}`,
       message: `<b>1VPN</b>\nАдминистратор пополнил баланс на <b>${(params.amountKopeks / 100).toFixed(2)} RUB</b>.\nТекущий баланс: <b>${(user.balanceKopeks / 100).toFixed(2)} RUB</b>.`,
-    });
+    }).catch(() => console.error("[billing] admin credit notification queue failed"));
   }
 
   return user;
@@ -391,6 +472,8 @@ export async function adjustBalanceByAdmin(params: {
 export async function grantDaysToAllUsers(params: {
   days: number;
   description: string;
+  actor: string;
+  requestId?: string;
 }) {
   if (!Number.isInteger(params.days) || params.days < 1 || params.days > 3650) {
     throw new Error("Количество дней должно быть от 1 до 3650.");
@@ -401,53 +484,64 @@ export async function grantDaysToAllUsers(params: {
     throw new Error("Сначала укажите положительную стоимость дня в настройках.");
   }
 
+  const operationId = `grant-days:${params.actor}:${params.requestId ?? randomUUID()}`;
+  const operation = await writeTransaction((tx) => tx.adminAuditEvent.upsert({
+    where: { id: operationId },
+    update: {},
+    create: { id: operationId, actor: params.actor, action: "GRANT_DAYS", details: { days: params.days, description: params.description } },
+  }));
+  const details = operation.details;
+  if (!details || typeof details !== "object" || Array.isArray(details) ||
+      details.days !== params.days || details.description !== params.description) {
+    throw new Error("Для другого начисления откройте форму заново.");
+  }
   const users = await db.user.findMany({
-    where: { role: Role.USER },
+    where: { role: Role.USER, createdAt: { lte: operation.createdAt } },
     select: { id: true },
   });
-  const cycleKey = `admin-grant:${Date.now()}:${params.days}`;
-  const amountKopeks = settings.pricePerDayKopeks * params.days;
+  const cycleKey = `admin-grant:${operation.id}`;
   let granted = 0;
   let failed = 0;
   let notified = 0;
-  let notificationFailed = 0;
 
   for (const item of users) {
-    let user: ManagedUser;
     try {
-      user = await db.$transaction(
+      const queued = await writeTransaction(
         async (tx) => {
-          const settled = await settleUserBilling(item.id, tx);
+          const ledgerId = `${operation.id}:${item.id}`;
+          if (await tx.balanceTransaction.findUnique({ where: { id: ledgerId }, select: { id: true } })) {
+            return false;
+          }
+          const currentSettings = await getSettings(tx);
+          const settled = await settleUserBilling(item.id, tx, new Date(), currentSettings);
+          const amountKopeks = currentSettings.pricePerDayKopeks * params.days *
+            resolveHwidDeviceLimit(settled, currentSettings.defaultHwidDeviceLimit);
 
-          return activateSubscription({
+          const user = await activateSubscription({
             tx,
             user: settled,
             amountKopeks,
             type: TransactionType.ADMIN_ADJUSTMENT,
             description: params.description,
+            actor: params.actor,
+            ledgerId,
           });
+          if (!user.telegramId) return false;
+          await notifyUserOnce({
+            user,
+            type: NotificationType.ADMIN_GRANT,
+            cycleKey,
+            message: `🎁 <b>Вам начислено ${params.days} дн.</b>\n\n${escapeTelegramHtml(params.description)}`,
+          }, tx);
+          return true;
         },
-        { timeout: 15_000, maxWait: 10_000 },
       );
 
       granted += 1;
-    } catch (error) {
+      if (queued) notified += 1;
+    } catch {
       failed += 1;
-      console.error(`[admin-grant] failed to update balance for user ${item.id}`, error);
-      continue;
-    }
-
-    try {
-      await notifyUserOnce({
-        user,
-        type: NotificationType.ADMIN_GRANT,
-        cycleKey,
-        message: `🎁 <b>Вам начислено ${params.days} дн.</b>\n\n${escapeTelegramHtml(params.description)}`,
-      });
-      notified += 1;
-    } catch (error) {
-      notificationFailed += 1;
-      console.error(`[admin-grant] failed to notify user ${item.id}`, error);
+      console.error("[admin-grant] user transaction failed", { operationId, userId: item.id });
     }
   }
 
@@ -456,32 +550,35 @@ export async function grantDaysToAllUsers(params: {
     granted,
     failed,
     notified,
-    notificationFailed,
-    amountKopeks,
   };
 }
 
-export async function setBanState(userId: string, isBanned: boolean) {
-  const user = await db.$transaction(
+export async function setBanState(userId: string, isBanned: boolean, actor: string) {
+  const user = await writeTransaction(
     async (tx) => {
       const settled = await settleUserBilling(userId, tx);
       const now = new Date();
 
+      if (settled.isBanned === isBanned) return null;
+      await tx.adminAuditEvent.create({
+        data: { actor, target: userId, action: isBanned ? "BAN_USER" : "UNBAN_USER" },
+      });
       return tx.user.update({
         where: { id: settled.id },
         data: {
           isBanned,
           bannedAt: isBanned ? now : null,
+          ...queueVpnSync(now),
           lastBillingAt:
             !isBanned && settled.balanceKopeks > 0 ? now : settled.lastBillingAt ?? now,
         },
         include: { squad: true },
       });
     },
-    { timeout: 15_000, maxWait: 10_000 },
   );
 
-  await syncUserLifecycle(user.id);
+  if (!user) return null;
+  await tryImmediateVpnSync(user.id);
 
   await notifyUserOnce({
     user,
@@ -490,52 +587,81 @@ export async function setBanState(userId: string, isBanned: boolean) {
     message: isBanned
       ? "<b>1VPN</b>\nДоступ временно приостановлен администратором."
       : "<b>1VPN</b>\nДоступ восстановлен. Подписка снова активна.",
-  });
+  }).catch(() => console.error("[billing] ban notification queue failed"));
 
   return user;
 }
 
-export async function syncUserLifecycle(userId: string) {
-  const settings = await getSettings();
-  const settled = await db.$transaction((tx) => settleUserBilling(userId, tx), {
-    timeout: 15_000,
-    maxWait: 10_000,
+async function tryImmediateVpnSync(userId: string) {
+  await syncUserLifecycle(userId).catch(() => {
+    console.error("[lifecycle] immediate synchronization failed");
   });
+}
 
-  if (settled.balanceKopeks > 0 && !settled.squad) {
-    await ensureUserSquad(settled.id);
-  }
+export async function syncUserLifecycle(userId: string, force = true) {
+  return withWorkLease(`vpn-user:${userId}`, 120_000, async () => {
+    const snapshot = await writeTransaction(async (tx) => {
+      const alreadyExists = await tx.user.findUnique({ where: { id: userId }, select: { id: true } });
+      if (!alreadyExists) return null;
 
-  const managed = await db.user.findUnique({
-    where: { id: settled.id },
-    include: { squad: true },
+      const settings = await getSettings(tx);
+      const now = new Date();
+      const managed = await settleUserBilling(userId, tx, now, settings);
+      if (!force && (!managed.vpnSyncAt || managed.vpnSyncAt > now)) return null;
+      if (managed.balanceKopeks > 0 && !managed.isBanned && !managed.squad) {
+        managed.squad = await ensureUserSquad(managed.id, tx);
+      }
+      if (managed.balanceKopeks > 0 && !managed.isBanned && !managed.remnawaveUsername) {
+        managed.remnawaveUsername = buildRemoteUsername(managed);
+        await tx.user.update({
+          where: { id: managed.id },
+          data: { remnawaveUsername: managed.remnawaveUsername },
+        });
+      }
+      if (force && !managed.vpnSyncAt) {
+        await tx.user.update({
+          where: { id: managed.id },
+          data: { vpnSyncAt: now },
+        });
+      }
+      return { managed, settings };
+    });
+    if (!snapshot) return null;
+    return reconcileUserVpn(snapshot.managed, snapshot.settings);
   });
+}
 
-  if (!managed) {
-    return null;
+async function reconcileUserVpn(managed: ManagedUser, settings: Awaited<ReturnType<typeof getSettings>>) {
+  const now = new Date();
+  async function update(data: Prisma.UserUncheckedUpdateManyInput, next: Date | null = null) {
+    return db.user.updateMany({
+      where: { id: managed.id, vpnSyncRevision: managed.vpnSyncRevision },
+      data: { ...data, vpnSyncAt: next },
+    });
   }
 
   try {
+    if (!managed.isBanned && managed.balanceKopeks <= 0 && managed.vpnProvisionState === "DELETED") {
+      return update({});
+    }
+    let remoteUuid = managed.remnawaveUserUuid;
+    if (!remoteUuid && managed.remnawaveUsername && (managed.isBanned || managed.subscriptionEndedAt)) {
+      remoteUuid = (await findRemoteUserByUsername(managed.remnawaveUsername, managed.email))?.uuid ?? null;
+    }
     if (managed.isBanned) {
-      await disableRemoteUser(managed.remnawaveUserUuid);
-      return db.user.update({
-        where: { id: managed.id },
-        data: {
-          vpnProvisionState: managed.remnawaveUserUuid ? "DISABLED" : "PENDING",
-          vpnStatusMessage: "Paused by admin ban",
-        },
-        include: { squad: true },
+      await disableRemoteUser(remoteUuid);
+      return update({
+        remnawaveUserUuid: remoteUuid,
+        vpnProvisionState: remoteUuid ? "DISABLED" : "PENDING",
+        vpnStatusMessage: "Paused by admin ban",
       });
     }
 
     if (managed.balanceKopeks > 0) {
-      const remainingDays = computeRemainingDays(
-        managed.balanceKopeks,
-        settings.pricePerDayKopeks,
-        resolveHwidDeviceLimit(managed, settings.defaultHwidDeviceLimit),
-      );
+      const expireAt = computeSubscriptionExpireAt(managed, settings, now);
+      const remainingMs = expireAt.getTime() - now.getTime();
 
-      if (remainingDays <= 1) {
+      if (remainingMs <= MS_IN_DAY) {
         await notifyUserOnce({
           user: managed,
           type: NotificationType.EXPIRING_SOON,
@@ -548,53 +674,67 @@ export async function syncUserLifecycle(userId: string) {
       let squadRemoteUuid = managed.squad?.remnawaveInternalSquadUuid ?? null;
 
       if (managed.squad && !squadRemoteUuid) {
-        squadRemoteUuid = await ensureRemoteSquad(managed.squad);
-
-        if (squadRemoteUuid) {
-          await db.squad.update({
-            where: { id: managed.squad.id },
-            data: { remnawaveInternalSquadUuid: squadRemoteUuid },
-          });
-        }
+        const squad = managed.squad;
+        squadRemoteUuid = await withWorkLease(`vpn-squad:${squad.id}`, 60_000, async () => {
+          const current = await db.squad.findUnique({ where: { id: squad.id } });
+          if (!current) return null;
+          if (current.remnawaveInternalSquadUuid) return current.remnawaveInternalSquadUuid;
+          const uuid = await ensureRemoteSquad(current);
+          if (uuid) {
+            await db.squad.updateMany({
+              where: { id: squad.id, remnawaveInternalSquadUuid: null },
+              data: { remnawaveInternalSquadUuid: uuid },
+            });
+          }
+          return uuid;
+        }) ?? null;
       }
 
       if (!squadRemoteUuid) {
-        return db.user.update({
-          where: { id: managed.id },
-          data: {
+        return update({
             vpnProvisionState: "PENDING",
             vpnStatusMessage: managed.squad
               ? "Укажите UUID сквада Remnawave в админке или заполните REMNAWAVE_DEFAULT_INBOUND_UUIDS для автосоздания"
               : "Ожидает назначения в свободный сквад",
-          },
-          include: { squad: true },
-        });
+      }, new Date(Date.now() + BILLING_INTERVAL_MS));
       }
+
+      const current = await db.user.findUnique({
+        where: { id: managed.id, vpnSyncRevision: managed.vpnSyncRevision },
+        select: { id: true },
+      });
+      if (!current) return;
 
       const remoteUser = await provisionRemoteUser({
         user: managed,
         squadRemoteUuid,
         hwidDeviceLimit: resolveHwidDeviceLimit(managed, settings.defaultHwidDeviceLimit),
-        expireAt: computeSubscriptionExpireAt(managed, settings),
+        expireAt,
       });
 
-      const updated = await db.user.update({
-        where: { id: managed.id },
-        data: remoteUser
-          ? {
-              remnawaveUserUuid: remoteUser.uuid,
-              remnawaveShortUuid: remoteUser.shortUuid,
-              subscriptionUrl: remoteUser.subscriptionUrl,
-              vpnProvisionState: "ACTIVE",
-              vpnStatusMessage: "Provisioned and active",
-            }
-          : {
-              vpnStatusMessage: "Running locally. Remnawave integration is not configured.",
-            },
-        include: { squad: true },
-      });
-
-      return updated;
+      const next = new Date(now.getTime() + Math.max(1_000, Math.min(
+        MS_IN_DAY,
+        remainingMs > MS_IN_DAY ? remainingMs - MS_IN_DAY : remainingMs,
+      )));
+      if (!remoteUser) {
+        return update({
+          vpnStatusMessage: "Running locally. Remnawave integration is not configured.",
+        }, new Date(Date.now() + BILLING_INTERVAL_MS));
+      }
+      const subscriptionUrl = managed.remnawaveUserUuid === remoteUser.uuid &&
+        managed.remnawaveShortUuid === remoteUser.shortUuid && managed.subscriptionUrl
+        ? managed.subscriptionUrl
+        : remoteUser.subscriptionUrl;
+      if (new URL(subscriptionUrl).protocol !== "https:") {
+        throw new Error("Remnawave subscription URL must use HTTPS.");
+      }
+      return update({
+        remnawaveUserUuid: remoteUser.uuid,
+        remnawaveShortUuid: remoteUser.shortUuid,
+        subscriptionUrl,
+        vpnProvisionState: "ACTIVE",
+        vpnStatusMessage: "Provisioned and active",
+      }, next);
     }
 
     if (managed.subscriptionEndedAt) {
@@ -604,14 +744,17 @@ export async function syncUserLifecycle(userId: string) {
         cycleKey: `${managed.billingCycle}:expired`,
         message: `<b>1VPN</b>\n⚠️ <b>Доступ скоро будет удалён</b>\n\nНа вашем балансе недостаточно средств. Пополните его в течение <b>${SUBSCRIPTION_DELETION_GRACE_HOURS} часов</b>, чтобы сохранить подписку.`,
       });
-      await disableRemoteUser(managed.remnawaveUserUuid);
+      await disableRemoteUser(remoteUuid);
     }
 
     if (managed.removalScheduledAt && managed.removalScheduledAt <= new Date()) {
-      await deleteRemoteUser(managed.remnawaveUserUuid);
-      const deleted = await db.user.update({
-        where: { id: managed.id },
-        data: {
+      const current = await db.user.findUnique({
+        where: { id: managed.id, vpnSyncRevision: managed.vpnSyncRevision },
+        select: { id: true },
+      });
+      if (!current) return;
+      await deleteRemoteUser(remoteUuid);
+      const deleted = await update({
           remnawaveUserUuid: null,
           remnawaveShortUuid: null,
           subscriptionUrl: null,
@@ -619,77 +762,70 @@ export async function syncUserLifecycle(userId: string) {
           removalScheduledAt: null,
           vpnProvisionState: "DELETED",
           vpnStatusMessage: "Subscription link deleted after grace period",
-        },
-        include: { squad: true },
       });
+      if (!deleted.count) return;
 
       await notifyUserOnce({
-        user: deleted,
+        user: managed,
         type: NotificationType.DELETED,
-        cycleKey: `${deleted.billingCycle}:deleted`,
+        cycleKey: `${managed.billingCycle}:deleted`,
         message:
           "<b>1VPN</b>\nСсылка подписки удалена, пользователь удалён из сквада. Пополните баланс, чтобы создать доступ заново.",
       });
 
-      return deleted;
+      return;
     }
 
-    return db.user.update({
-      where: { id: managed.id },
-      data: {
-        vpnProvisionState: managed.remnawaveUserUuid ? "DISABLED" : "PENDING",
+    return update({
+        remnawaveUserUuid: remoteUuid,
+        vpnProvisionState: remoteUuid ? "DISABLED" : "PENDING",
         vpnStatusMessage: managed.subscriptionEndedAt
           ? "Waiting for balance top-up"
           : "Awaiting initial funding",
-      },
-      include: { squad: true },
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown Remnawave error";
-
-    return db.user.update({
-      where: { id: managed.id },
-      data: {
+    }, managed.removalScheduledAt);
+  } catch {
+    return update({
         vpnProvisionState: "ERROR",
-        vpnStatusMessage: message.slice(0, 300),
-      },
-      include: { squad: true },
-    });
+        vpnStatusMessage: "Ошибка синхронизации Remnawave. Запланирована повторная попытка.",
+    }, new Date(Date.now() + BILLING_INTERVAL_MS));
   }
 }
 
 async function executeLifecycleSweep() {
-  const users = await db.user.findMany({
-    select: { id: true },
-  });
-
-  for (const user of users) {
-    try {
-      await syncUserLifecycle(user.id);
-    } catch (error) {
-      console.error(`[lifecycle] failed to sync user ${user.id}`, error);
+  const now = new Date();
+  const billingCutoff = new Date(now.getTime() - BILLING_INTERVAL_MS);
+  const deadline = now.getTime() + 5 * 60_000;
+  let cursor: string | undefined;
+  do {
+    const users: { id: string }[] = await db.user.findMany({
+      where: {
+        id: cursor ? { gt: cursor } : undefined,
+        OR: [
+          { vpnSyncAt: { lte: now } },
+          { isBanned: false, balanceKopeks: { gt: 0 }, OR: [
+            { lastBillingAt: { lte: billingCutoff } },
+            { lastBillingAt: null },
+          ] },
+        ],
+      },
+      orderBy: { id: "asc" },
+      select: { id: true },
+      take: 40,
+    });
+    if (!users.length) break;
+    for (let index = 0; index < users.length && Date.now() < deadline; index += 4) {
+      const batch = users.slice(index, index + 4);
+      const results = await Promise.allSettled(batch.map(({ id }) => syncUserLifecycle(id, false)));
+      for (const result of results) {
+        if (result.status === "rejected") console.error("[lifecycle] user reconciliation failed");
+      }
     }
-  }
+    cursor = users.at(-1)?.id;
+  } while (cursor && Date.now() < deadline);
 }
 
 export async function runLifecycleSweep() {
-  if (lifecycleState.__oneVpnLifecycleSweep) {
-    console.warn("[lifecycle] sweep already running; reusing the active job");
-    return lifecycleState.__oneVpnLifecycleSweep;
-  }
-
-  const startedAt = Date.now();
-  const sweep = executeLifecycleSweep();
-  lifecycleState.__oneVpnLifecycleSweep = sweep;
-
-  try {
-    await sweep;
-  } finally {
-    if (lifecycleState.__oneVpnLifecycleSweep === sweep) {
-      lifecycleState.__oneVpnLifecycleSweep = undefined;
-    }
-    console.info(`[lifecycle] sweep completed in ${Date.now() - startedAt} ms`);
-  }
+  await withWorkLease("lifecycle", 8 * 60_000, executeLifecycleSweep);
 }
 
 export async function getUserOverview(userId: string) {

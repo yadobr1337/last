@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { db } from "@/lib/db";
+import { writeTransaction } from "@/lib/db";
+import { queueVpnSync } from "@/lib/billing";
 import { env } from "@/lib/env";
 import { sendTelegramMessage } from "@/lib/telegram";
 import { consumeTelegramLinkToken } from "@/lib/telegram-link";
@@ -66,7 +67,8 @@ export async function POST(request: Request) {
   const text = message?.text?.trim() ?? "";
   const match = text.match(/^\/start(?:@\w+)?\s+link_([A-Za-z0-9_-]+)$/);
 
-  if (!message || message.chat.type !== "private" || !message.from || !match) {
+  if (!message || message.chat.type !== "private" || !message.from ||
+      message.from.id !== message.chat.id || !match) {
     if (message?.chat.type === "private" && text.startsWith("/start")) {
       await sendTelegramMessage(
         String(message.chat.id),
@@ -85,21 +87,28 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true });
   }
 
+  const sender = message.from;
   try {
-    await db.$transaction([
-      db.user.update({
+    await writeTransaction(async (tx) => {
+      await tx.verificationToken.delete({
+        where: { token: link.storedToken, expires: { gt: new Date() } },
+      });
+      const user = await tx.user.findUniqueOrThrow({
+        where: { id: link.userId, isBanned: false },
+        select: { telegramId: true },
+      });
+      await tx.user.update({
         where: { id: link.userId },
         data: {
-          telegramId: String(message.from.id),
-          telegramFirstName: message.from.first_name,
-          telegramUsername: message.from.username ?? null,
+          telegramId: String(sender.id),
+          telegramFirstName: sender.first_name,
+          telegramUsername: sender.username ?? null,
+          telegramPhotoUrl: user.telegramId === String(sender.id) ? undefined : null,
           telegramBotConfirmedAt: new Date(),
+          ...queueVpnSync(),
         },
-      }),
-      db.verificationToken.delete({
-        where: { token: link.storedToken },
-      }),
-    ]);
+      });
+    });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       await sendTelegramMessage(

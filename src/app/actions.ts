@@ -4,12 +4,14 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { z } from "zod";
 import { db } from "@/lib/db";
-import { env } from "@/lib/env";
 import { hashPassword } from "@/lib/passwords";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import {
   adjustBalanceByAdmin,
+  changeBillingSettings,
+  changeDeviceLimit,
   claimTrialDay,
   grantDaysToAllUsers,
   runLifecycleSweep,
@@ -24,6 +26,8 @@ import {
   issueEmailCode,
 } from "@/lib/email-codes";
 import { broadcastTelegramMessage } from "@/lib/notifications";
+import { canUseDemoPayments, parseRubleAmount } from "@/lib/money";
+import { takeRateLimit } from "@/lib/rate-limit";
 import {
   checkRemnawaveConnection,
   deleteRemoteUserDevice,
@@ -34,17 +38,14 @@ import { createSquad, deleteSquad, updateSquad } from "@/lib/squads";
 import { resolveUserIdentifier } from "@/lib/user-identity";
 import { SUBSCRIPTION_DELETION_GRACE_HOURS } from "@/lib/site";
 import { runProvisioningSweep } from "@/lib/provisioning";
+import { getProvisioningConfig } from "@/lib/provisioning-capacity";
 import {
   createYooKassaPayment,
   type YooKassaPaymentMethod,
 } from "@/lib/yookassa";
 
 function parseKopeks(value: FormDataEntryValue | null) {
-  const amount = Number(String(value ?? "0").replace(",", "."));
-  if (!Number.isFinite(amount)) {
-    throw new Error("Invalid amount.");
-  }
-  return Math.round(amount * 100);
+  return parseRubleAmount(String(value ?? ""));
 }
 
 function parseOptionalInteger(value: FormDataEntryValue | null) {
@@ -63,7 +64,7 @@ function parseOptionalInteger(value: FormDataEntryValue | null) {
 
 function parseRequiredPositiveInteger(value: FormDataEntryValue | null) {
   const parsed = Number(String(value ?? "").trim());
-  if (!Number.isInteger(parsed) || parsed < 1) {
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 2_147_483_647) {
     throw new Error("Invalid integer value.");
   }
   return parsed;
@@ -153,7 +154,7 @@ function redirectByPasswordMailError(error: unknown) {
 export async function topUpBalanceAction(formData: FormData) {
   const session = await requireUser();
 
-  if (env.PAYMENTS_AUTO_APPROVE !== "true") {
+  if (!canUseDemoPayments()) {
     throw new Error("Automatic top-up is disabled until a payment provider is connected.");
   }
 
@@ -174,6 +175,9 @@ export async function createYooKassaPaymentAction(formData: FormData) {
 
   if (method !== "bank_card" && method !== "sbp") {
     throw new Error("Unsupported payment method.");
+  }
+  if (!await takeRateLimit("payment-start", session.user.id, 15, 10 * 60_000)) {
+    throw new Error("Слишком много попыток оплаты. Повторите позже.");
   }
 
   const confirmationUrl = await createYooKassaPayment({
@@ -203,20 +207,32 @@ export async function claimTrialAction() {
 }
 
 export async function updateSettingsAction(formData: FormData) {
-  await requireAdmin();
+  const { user } = await requireAdmin();
+  const pricePerDayKopeks = parseKopeks(formData.get("pricePerDay"));
+  if (pricePerDayKopeks <= 0) throw new Error("Укажите положительную стоимость дня.");
+  const defaultHwidDeviceLimit = parseRequiredPositiveInteger(formData.get("defaultHwidDeviceLimit"));
+  const trialDays = parseRequiredPositiveInteger(formData.get("trialDays"));
+  if (defaultHwidDeviceLimit > 100 || trialDays > 3650 ||
+      pricePerDayKopeks * defaultHwidDeviceLimit * trialDays > 2_147_483_647) {
+    throw new Error("Цена, пробный период или лимит устройств выходят за допустимый диапазон.");
+  }
+  const supportTelegramUrl = parseOptionalString(formData.get("supportTelegramUrl"));
+  if (supportTelegramUrl) {
+    const url = new URL(supportTelegramUrl);
+    if (url.protocol !== "https:" || url.hostname !== "t.me" || url.username || url.password) {
+      throw new Error("Укажите ссылку поддержки на https://t.me/.");
+    }
+  }
 
-  await db.systemSettings.update({
-    where: { id: "default" },
-    data: {
-      pricePerDayKopeks: parseKopeks(formData.get("pricePerDay")),
-      trialDays: parseRequiredPositiveInteger(formData.get("trialDays")),
+  await changeBillingSettings({
+      pricePerDayKopeks,
+      trialDays,
       deletionGraceHours: SUBSCRIPTION_DELETION_GRACE_HOURS,
-      defaultHwidDeviceLimit: parseRequiredPositiveInteger(formData.get("defaultHwidDeviceLimit")),
+      defaultHwidDeviceLimit,
       captchaEnabled: String(formData.get("captchaEnabled")) === "on",
-      supportTelegramUrl: String(formData.get("supportTelegramUrl") ?? "") || null,
+      supportTelegramUrl,
       heroAnnouncement: String(formData.get("heroAnnouncement") ?? "") || null,
-    },
-  });
+  }, user.id);
 
   revalidatePath("/");
   revalidatePath("/admin");
@@ -256,7 +272,7 @@ export async function grantDaysToAllUsersAction(
   _previousState: AdminOperationActionState,
   formData: FormData,
 ): Promise<AdminOperationActionState> {
-  await requireAdmin();
+  const { user } = await requireAdmin();
   void _previousState;
 
   try {
@@ -264,13 +280,15 @@ export async function grantDaysToAllUsersAction(
     const description =
       parseOptionalString(formData.get("description")) ??
       `Подарок от 1VPN: ${days} дополнительных дней подписки.`;
-    const result = await grantDaysToAllUsers({ days, description });
+    if (description.length > 300) throw new Error("Описание должно содержать до 300 символов.");
+    const requestId = z.uuid().parse(formData.get("requestId"));
+    const result = await grantDaysToAllUsers({ days, description, actor: user.id, requestId });
 
     revalidatePath("/admin");
     revalidatePath("/dashboard");
     return {
       status: result.failed ? "error" : "success",
-      message: `Пополнено: ${result.granted} из ${result.total}. Каждый получил ${(result.amountKopeks / 100).toFixed(2)} ₽ (${days} дн. × цена дня). Ошибок баланса: ${result.failed}.`,
+      message: `Обработано: ${result.granted} из ${result.total}. Начислено за ${days} дн. с учётом устройств. Ошибок баланса: ${result.failed}.`,
     };
   } catch (error) {
     return { status: "error", message: getActionErrorMessage(error) };
@@ -312,7 +330,7 @@ export async function broadcastTelegramAction(
   _previousState: AdminOperationActionState,
   formData: FormData,
 ): Promise<AdminOperationActionState> {
-  await requireAdmin();
+  const { user } = await requireAdmin();
   void _previousState;
 
   try {
@@ -329,7 +347,8 @@ export async function broadcastTelegramAction(
       throw new Error("Загрузите изображение размером не более 7 МБ.");
     }
 
-    const result = await broadcastTelegramMessage({ text, photo });
+    const result = await broadcastTelegramMessage({ text, photo, actor: user.id });
+    if (!result) return { status: "error", message: "Рассылка уже выполняется." };
     const errorSummary = result.errors.length
       ? ` Причина: ${result.errors
           .map((item) => `${item.count}× ${item.message.slice(0, 120)}`)
@@ -351,8 +370,9 @@ export async function broadcastTelegramAction(
 export async function restartSiteAction(
   _previousState: SiteRestartActionState,
 ): Promise<SiteRestartActionState> {
-  await requireAdmin();
+  const { user } = await requireAdmin();
   void _previousState;
+  await db.adminAuditEvent.create({ data: { actor: user.id, action: "RESTART_SITE" } });
 
   const restartRequestPath = "/var/www/site1vpn/runtime/restart.request";
   let requestFileError: string | null = null;
@@ -382,15 +402,16 @@ export async function createSquadAction(
   _previousState: SquadActionState = initialSquadActionState,
   formData: FormData,
 ): Promise<SquadActionState> {
-  await requireAdmin();
+  const { user } = await requireAdmin();
   void _previousState;
 
   try {
-    const remnawaveInternalSquadUuid = parseRequiredString(
+    const remnawaveInternalSquadUuid = z.uuid().parse(
       formData.get("remnawaveInternalSquadUuid"),
     );
     await getRemoteInternalSquad(remnawaveInternalSquadUuid);
     await createSquad({
+      actor: user.id,
       name: String(formData.get("name") ?? ""),
       memberLimit: parseRequiredPositiveInteger(formData.get("memberLimit")),
       remnawaveInternalSquadUuid,
@@ -408,25 +429,25 @@ export async function updateSquadLimitAction(
   _previousState: SquadActionState = initialSquadActionState,
   formData: FormData,
 ): Promise<SquadActionState> {
-  await requireAdmin();
+  const { user } = await requireAdmin();
   void _previousState;
 
   try {
-    const remnawaveInternalSquadUuid = parseRequiredString(
+    const remnawaveInternalSquadUuid = z.uuid().parse(
       formData.get("remnawaveInternalSquadUuid"),
     );
     await getRemoteInternalSquad(remnawaveInternalSquadUuid);
     await updateSquad({
+      actor: user.id,
       squadId: String(formData.get("squadId")),
       name: String(formData.get("name") ?? ""),
       memberLimit: parseRequiredPositiveInteger(formData.get("memberLimit")),
       isActive: String(formData.get("isActive")) === "on",
       remnawaveInternalSquadUuid,
     });
-    await runLifecycleSweep();
     revalidatePath("/admin");
     revalidatePath("/dashboard");
-    return { status: "success", message: "Сквад обновлён, пользователи синхронизированы." };
+    return { status: "success", message: "Сквад обновлён, синхронизация запланирована." };
   } catch (error) {
     return { status: "error", message: getActionErrorMessage(error) };
   }
@@ -436,17 +457,16 @@ export async function deleteSquadAction(
   _previousState: SquadActionState = initialSquadActionState,
   formData: FormData,
 ): Promise<SquadActionState> {
-  await requireAdmin();
+  const { user } = await requireAdmin();
   void _previousState;
 
   try {
-    await deleteSquad(String(formData.get("squadId")));
-    await runLifecycleSweep();
+    await deleteSquad(parseRequiredString(formData.get("squadId")), user.id);
     revalidatePath("/admin");
     revalidatePath("/dashboard");
     return {
       status: "success",
-      message: "Сквад удалён. Пользователи отвязаны и перераспределены при наличии мест.",
+      message: "Сквад удалён. Перераспределение пользователей запланировано.",
     };
   } catch (error) {
     return { status: "error", message: getActionErrorMessage(error) };
@@ -454,10 +474,11 @@ export async function deleteSquadAction(
 }
 
 export async function toggleBanAction(formData: FormData) {
-  await requireAdmin();
+  const { user } = await requireAdmin();
   await setBanState(
     await resolveUserIdentifier(String(formData.get("userId") ?? "")),
     String(formData.get("ban")) === "true",
+    user.id,
   );
   revalidatePath("/admin");
   revalidatePath("/dashboard");
@@ -467,7 +488,7 @@ export async function adjustUserBalanceAction(
   _previousState: AdminBalanceActionState,
   formData: FormData,
 ): Promise<AdminBalanceActionState> {
-  await requireAdmin();
+  const { user } = await requireAdmin();
   void _previousState;
 
   try {
@@ -480,6 +501,7 @@ export async function adjustUserBalanceAction(
 
     const isCredit = operation === "credit";
     await adjustBalanceByAdmin({
+      actor: user.id,
       userId: await resolveUserIdentifier(String(formData.get("userId") ?? "")),
       amountKopeks: isCredit ? amountKopeks : -amountKopeks,
       description:
@@ -499,17 +521,10 @@ export async function adjustUserBalanceAction(
 }
 
 export async function updateUserHwidAction(formData: FormData) {
-  await requireAdmin();
+  const { user } = await requireAdmin();
   const userId = await resolveUserIdentifier(String(formData.get("userId") ?? ""));
 
-  await db.user.update({
-    where: { id: userId },
-    data: {
-      hwidDeviceLimit: parseOptionalInteger(formData.get("hwidDeviceLimit")),
-    },
-  });
-
-  await syncUserLifecycle(userId);
+  await changeDeviceLimit(userId, parseOptionalInteger(formData.get("hwidDeviceLimit")), user.id);
   revalidatePath("/admin");
   revalidatePath("/dashboard");
 }
@@ -517,14 +532,7 @@ export async function updateUserHwidAction(formData: FormData) {
 export async function updateOwnHwidAction(formData: FormData) {
   const session = await requireUser();
 
-  await db.user.update({
-    where: { id: session.user.id },
-    data: {
-      hwidDeviceLimit: parseRequiredPositiveInteger(formData.get("hwidDeviceLimit")),
-    },
-  });
-
-  await syncUserLifecycle(session.user.id);
+  await changeDeviceLimit(session.user.id, parseRequiredPositiveInteger(formData.get("hwidDeviceLimit")));
   revalidatePath("/admin");
   revalidatePath("/dashboard");
 }
@@ -532,6 +540,9 @@ export async function updateOwnHwidAction(formData: FormData) {
 export async function updateOwnEmailAction(formData: FormData) {
   const session = await requireUser();
   const email = parseRequiredString(formData.get("email")).toLowerCase();
+  if (!z.email().max(254).safeParse(email).success || email.endsWith("@1vpn.local")) {
+    redirect("/dashboard/account?emailStatus=invalid_email");
+  }
 
   const existing = await db.user.findFirst({
     where: {
@@ -581,31 +592,29 @@ export async function verifyOwnEmailAction(formData: FormData) {
     select: {
       id: true,
       pendingEmail: true,
+      email: true,
+      emailVerified: true,
+      isEmailPlaceholder: true,
     },
   });
 
-  if (!user?.pendingEmail) {
+  const target = user?.pendingEmail ?? (user && !user.isEmailPlaceholder && !user.emailVerified ? user.email : null);
+  if (!user || !target) {
     redirect("/dashboard/account?emailStatus=no_pending_email");
   }
 
   const valid = await consumeEmailCode(
-    buildEmailVerificationIdentifier(user.id, user.pendingEmail),
+    buildEmailVerificationIdentifier(user.id, target),
     code,
+    (tx) => tx.user.update({
+      where: { id: user.id, email: user.email, pendingEmail: user.pendingEmail, isBanned: false },
+      data: { email: target, pendingEmail: null, isEmailPlaceholder: false, emailVerified: new Date() },
+    }),
   );
 
   if (!valid) {
     redirect("/dashboard/account?emailStatus=invalid_code");
   }
-
-  await db.user.update({
-    where: { id: user.id },
-    data: {
-      email: user.pendingEmail,
-      pendingEmail: null,
-      isEmailPlaceholder: false,
-      emailVerified: new Date(),
-    },
-  });
 
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/account");
@@ -671,7 +680,7 @@ export async function sendOwnPasswordChangeCodeAction() {
 
   try {
     await issueEmailCode({
-      identifier: buildPasswordChangeIdentifier(user.id),
+      identifier: buildPasswordChangeIdentifier(user.id, user.email),
       email: user.email,
       subject: "1VPN: код для смены пароля",
       title: "Смена пароля",
@@ -690,7 +699,7 @@ export async function updateOwnPasswordAction(formData: FormData) {
   const code = parseRequiredString(formData.get("code"));
   const newPassword = parseRequiredString(formData.get("newPassword"));
 
-  if (newPassword.length < 8 || newPassword.length > 64) {
+  if (newPassword.length < 8 || newPassword.length > 64 || Buffer.byteLength(newPassword) > 72) {
     redirect("/dashboard/account?passwordStatus=weak_password");
   }
 
@@ -698,8 +707,10 @@ export async function updateOwnPasswordAction(formData: FormData) {
     where: { id: session.user.id },
     select: {
       id: true,
+      email: true,
       emailVerified: true,
       isEmailPlaceholder: true,
+      authVersion: true,
     },
   });
 
@@ -711,20 +722,21 @@ export async function updateOwnPasswordAction(formData: FormData) {
     redirect("/dashboard/account?passwordStatus=no_verified_email");
   }
 
-  const isValid = await consumeEmailCode(buildPasswordChangeIdentifier(user.id), code);
+  const isValid = await consumeEmailCode(buildPasswordChangeIdentifier(user.id, user.email), code, async (tx) => {
+    await tx.user.update({
+      where: { id: user.id, email: user.email, authVersion: user.authVersion, isBanned: false },
+      data: {
+        passwordHash: await hashPassword(newPassword),
+        authVersion: { increment: 1 },
+      },
+    });
+  });
   if (!isValid) {
     redirect("/dashboard/account?passwordStatus=invalid_code");
   }
 
-  await db.user.update({
-    where: { id: session.user.id },
-    data: {
-      passwordHash: await hashPassword(newPassword),
-    },
-  });
-
   revalidatePath("/dashboard/account");
-  redirect("/dashboard/account?passwordStatus=updated");
+  redirect("/login");
 }
 
 export async function deleteOwnHwidDeviceAction(formData: FormData) {
@@ -757,9 +769,13 @@ export async function runSyncNowAction() {
   revalidatePath("/dashboard");
 }
 
-export async function runProvisioningNowAction() {
-  await requireAdmin();
-  await runProvisioningSweep();
+export async function runProvisioningNowAction(formData: FormData) {
+  const { user } = await requireAdmin();
+  const config = getProvisioningConfig();
+  if (config.enabled && !config.dryRun && formData.get("confirmPaidProvisioning") !== "on") {
+    throw new Error("Подтвердите возможную покупку VPS.");
+  }
+  await runProvisioningSweep(user.id);
   revalidatePath("/admin");
   revalidatePath("/dashboard");
 }

@@ -19,7 +19,6 @@ import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { getRemoteUserDevices } from "@/lib/remnawave";
 import { DEFAULT_SUPPORT_TELEGRAM_URL } from "@/lib/site";
-import { ensureUserPublicId } from "@/lib/user-identity";
 import { formatCurrency, formatDays } from "@/lib/utils";
 import { canUseYooKassa } from "@/lib/yookassa";
 
@@ -102,9 +101,9 @@ async function DeviceList({ remnawaveUserUuid }: { remnawaveUserUuid?: string | 
 
 export default async function DashboardPage() {
   const session = await requireUser();
-  const [overview, publicId, transactions] = await Promise.all([
+  const publicId = session.user.publicId;
+  const [overview, transactions] = await Promise.all([
     getUserOverview(session.user.id),
-    ensureUserPublicId(session.user.id),
     db.balanceTransaction.findMany({
       where: {
         userId: session.user.id,

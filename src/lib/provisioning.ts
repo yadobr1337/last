@@ -1,8 +1,12 @@
 import "server-only";
 
+import { isIPv4 } from "node:net";
 import type { ProvisioningJob } from "@prisma/client";
-import { db } from "@/lib/db";
+import { z } from "zod";
+import { db, writeTransaction } from "@/lib/db";
 import { env } from "@/lib/env";
+import { parseRubleAmount } from "@/lib/money";
+import { withWorkLease } from "@/lib/work-lease";
 import {
   appendLog,
   ensureProvisioningCapacity,
@@ -23,13 +27,10 @@ type AezaServerInfo = {
   ip: string | null;
 };
 
-const state = globalThis as typeof globalThis & {
-  __oneVpnProvisioningSweep?: Promise<ProvisioningRunResult>;
-};
-
 const HYSTERIA_BBR_CONFIG = {
   log: {
-    loglevel: "debug",
+    loglevel: "warning",
+    access: "none",
   },
   dns: {
     servers: ["1.1.1.1", "8.8.8.8"],
@@ -50,7 +51,7 @@ const HYSTERIA_BBR_CONFIG = {
         security: "tls",
         finalmask: {
           quicParams: {
-            debug: true,
+            debug: false,
             congestion: "reno",
             maxIdleTimeout: 60,
             keepAlivePeriod: 10,
@@ -154,24 +155,13 @@ async function updateJobError(job: ProvisioningJob, error: unknown) {
   });
 }
 
-export async function runProvisioningSweep(): Promise<ProvisioningRunResult> {
-  if (state.__oneVpnProvisioningSweep) {
-    return state.__oneVpnProvisioningSweep;
-  }
-
-  const sweep = executeProvisioningSweep();
-  state.__oneVpnProvisioningSweep = sweep;
-
-  try {
-    return await sweep;
-  } finally {
-    if (state.__oneVpnProvisioningSweep === sweep) {
-      state.__oneVpnProvisioningSweep = undefined;
-    }
-  }
+export async function runProvisioningSweep(actor = "system:cron"): Promise<ProvisioningRunResult> {
+  return await withWorkLease("provisioning", 30 * 60_000, () => executeProvisioningSweep(actor)) ?? {
+    ok: true, message: "Provisioning is already running.", processed: 0, createdJobs: 0, errors: [],
+  };
 }
 
-async function executeProvisioningSweep(): Promise<ProvisioningRunResult> {
+async function executeProvisioningSweep(actor: string): Promise<ProvisioningRunResult> {
   const config = getProvisioningConfig();
 
   if (!config.enabled) {
@@ -218,13 +208,16 @@ async function executeProvisioningSweep(): Promise<ProvisioningRunResult> {
 
   let processed = 0;
   const errors: string[] = [];
+  const deadline = Date.now() + 90_000;
 
   for (const job of jobs) {
+    if (Date.now() >= deadline) break;
     try {
-      await processProvisioningJob(job, config);
+      await processProvisioningJob(job, config, actor);
       processed += 1;
     } catch (error) {
-      const updated = await updateJobError(job, error);
+      const latest = await db.provisioningJob.findUniqueOrThrow({ where: { id: job.id } });
+      const updated = await updateJobError(latest, error);
       errors.push(`${updated.nodeName}: ${updated.lastError ?? "unknown error"}`);
     }
   }
@@ -238,8 +231,9 @@ async function executeProvisioningSweep(): Promise<ProvisioningRunResult> {
   };
 }
 
-async function processProvisioningJob(job: ProvisioningJob, config: ProvisioningConfig) {
+async function processProvisioningJob(job: ProvisioningJob, config: ProvisioningConfig, actor: string) {
   if (config.dryRun) {
+    if (job.status !== "PENDING" && job.status !== "DRY_RUN") return;
     await db.provisioningJob.update({
       where: { id: job.id },
       data: {
@@ -250,8 +244,8 @@ async function processProvisioningJob(job: ProvisioningJob, config: Provisioning
     return;
   }
 
-  if (job.status === "PENDING" || job.status === "DRY_RUN") {
-    await orderServer(job);
+  if (["PENDING", "DRY_RUN", "ORDER_UNCERTAIN"].includes(job.status)) {
+    await orderServer(job, config, actor);
     return;
   }
 
@@ -291,20 +285,15 @@ async function aezaRequest<T>(path: string, init: RequestInit = {}) {
       ...(init.headers ?? {}),
     },
     cache: "no-store",
+    redirect: "error",
+    signal: AbortSignal.timeout(12_000),
   });
 
-  const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
-
   if (!response.ok) {
-    const message =
-      typeof payload === "object" && payload && "message" in payload
-        ? String(payload.message)
-        : response.statusText;
-    throw new Error(`Aeza API ${response.status}: ${message}`);
+    throw new Error(`Aeza API HTTP ${response.status}`);
   }
 
-  return payload as T;
+  return (await response.json()) as T;
 }
 
 function getAezaOrderParameters() {
@@ -324,11 +313,14 @@ function toProviderProductId(value: string) {
   return Number.isFinite(numeric) ? numeric : value;
 }
 
-function isIPv4(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(value)
-  );
+function isPublicIPv4(value: unknown): value is string {
+  if (typeof value !== "string" || !isIPv4(value)) return false;
+  const [first, second] = value.split(".").map(Number);
+  return first > 0 && first < 224 && first !== 10 && first !== 127 &&
+    !(first === 100 && second >= 64 && second <= 127) &&
+    !(first === 169 && second === 254) &&
+    !(first === 172 && second >= 16 && second <= 31) &&
+    !(first === 192 && second === 168);
 }
 
 function findDeep(value: unknown, keys: string[]): unknown {
@@ -368,36 +360,42 @@ function extractServerInfo(payload: unknown): AezaServerInfo {
   const ip = findDeep(payload, ["ip", "ipv4", "mainIp", "main_ip"]);
 
   return {
-    id: typeof id === "string" || typeof id === "number" ? String(id) : null,
-    ip: isIPv4(ip) ? ip : null,
+    id: providerId(id),
+    ip: isPublicIPv4(ip) ? ip : null,
   };
 }
 
 function extractOrderId(payload: unknown) {
-  const orderId = findDeep(payload, ["orderId", "order_id", "transactionId", "transaction_id"]);
-  return typeof orderId === "string" || typeof orderId === "number" ? String(orderId) : null;
+  if (!payload || typeof payload !== "object") return null;
+  const record = payload as Record<string, unknown>;
+  const order = record.order && typeof record.order === "object" ? record.order as Record<string, unknown> : record;
+  return providerId(order.orderId ?? order.id);
+}
+
+function providerId(value: unknown) {
+  const id = typeof value === "number" || typeof value === "string" ? String(value) : "";
+  return /^[\w-]{1,80}$/.test(id) ? id : null;
 }
 
 async function findAezaServerByName(name: string): Promise<AezaServerInfo | null> {
-  const payload = await aezaRequest<unknown>("services", { method: "GET" });
-  const items = findDeep(payload, ["items"]);
-  const servers = Array.isArray(items) ? items : [];
-
-  for (const server of servers) {
-    if (!server || typeof server !== "object") {
-      continue;
+  for (let offset = 0; offset < 1_000; offset += 100) {
+    const payload = await aezaRequest<unknown>(`services?offset=${offset}&count=100`, { method: "GET" });
+    const items = findDeep(payload, ["items"]);
+    if (!Array.isArray(items)) throw new Error("Aeza returned an invalid service inventory.");
+    const matches = items.filter((item) => item && typeof item === "object" &&
+      (item.name === name || item.title === name));
+    if (matches.length > 1) throw new Error("Aeza inventory contains duplicate node names.");
+    if (matches.length) {
+      const server = extractServerInfo(matches[0]);
+      if (!server.id) throw new Error("Aeza returned a service without an ID.");
+      return server;
     }
-
-    const record = server as Record<string, unknown>;
-    if (record.name === name || record.title === name) {
-      return extractServerInfo(record);
-    }
+    if (items.length < 100) return null;
   }
-
-  return null;
+  throw new Error("Aeza inventory is too large to verify automatically.");
 }
 
-async function orderServer(job: ProvisioningJob) {
+async function orderServer(job: ProvisioningJob, config: ProvisioningConfig, actor: string) {
   const existing = await findAezaServerByName(job.nodeName);
   if (existing?.id || existing?.ip) {
     await db.provisioningJob.update({
@@ -412,44 +410,94 @@ async function orderServer(job: ProvisioningJob) {
     return;
   }
 
+  if (job.orderAttemptedAt || job.status === "ORDER_UNCERTAIN") {
+    throw new Error("Исход заказа Aeza неизвестен. Сверьте его в кабинете провайдера.");
+  }
+  const budget = env.AEZA_MAX_DAILY_SPEND_MINOR;
+  const orderLimit = env.AEZA_MAX_DAILY_ORDERS;
+  if (!budget || !orderLimit || !env.AEZA_ORDER_CURRENCY || env.AEZA_AUTO_PROLONG === "true") {
+    throw new Error("Укажите бюджет, валюту и лимит заказов Aeza. Автопродление должно быть выключено.");
+  }
+
+  const term = env.AEZA_TERM ?? "month";
+  if (env.AEZA_ORDER_PARAMETERS_JSON) {
+    throw new Error("Для автозакупки с лимитом используйте стандартные параметры Aeza.");
+  }
+  const parameters = getAezaOrderParameters();
+  const quoteQuery = new URLSearchParams({
+    productId: job.productId, paymentTerm: term, termCount: "1",
+  });
+  const quote = await aezaRequest<{ totalPrice?: string; currency?: string }>(`services/orders/price?${quoteQuery}`);
+  if (quote.currency !== env.AEZA_ORDER_CURRENCY || typeof quote.totalPrice !== "string") {
+    throw new Error("Aeza не подтвердила цену и валюту заказа в ожидаемом формате.");
+  }
+  const cost = parseRubleAmount(quote.totalPrice);
+  if (cost <= 0 || cost > budget) throw new Error("Цена заказа Aeza выходит за пределы бюджета.");
+
+  const reserved = await writeTransaction(async (tx) => {
+    const now = new Date();
+    const recent = await tx.provisioningJob.aggregate({
+      where: { orderAttemptedAt: { gt: new Date(now.getTime() - 86_400_000) } },
+      _count: true,
+      _sum: { quotedCostMinor: true },
+    });
+    if (recent._count >= orderLimit || (recent._sum.quotedCostMinor ?? 0) + cost > budget) {
+      throw new Error("Исчерпан лимит заказов Aeza за последние 24 часа.");
+    }
+    const total = await tx.provisioningJob.count({
+      where: { OR: [{ orderAttemptedAt: { not: null } }, { serverId: { not: null } }, { orderId: { not: null } }] },
+    });
+    if (total >= config.maxServers) throw new Error("Достигнут общий лимит серверов.");
+    const claimed = await tx.provisioningJob.updateMany({
+      where: { id: job.id, orderAttemptedAt: null, status: { in: ["PENDING", "DRY_RUN"] } },
+      data: {
+        status: "ORDER_UNCERTAIN",
+        orderAttemptedAt: now,
+        quotedCostMinor: cost,
+        logs: appendLog(job.logs, "Aeza purchase reserved", { cost, currency: quote.currency }),
+      },
+    });
+    if (!claimed.count) return false;
+    await tx.adminAuditEvent.create({
+      data: { actor, action: "AEZA_ORDER_RESERVED", target: job.id, details: { cost, currency: quote.currency! } },
+    });
+    return true;
+  });
+  if (!reserved) return;
+
   const payload = await aezaRequest<unknown>("services/orders", {
     method: "POST",
     body: JSON.stringify({
-      count: 1,
-      method: "balance",
-      productId: toProviderProductId(job.productId),
-      term: env.AEZA_TERM ?? "month",
-      autoProlong: env.AEZA_AUTO_PROLONG === "true",
-      name: job.nodeName,
-      parameters: getAezaOrderParameters(),
+      count: 1, method: "balance", productId: toProviderProductId(job.productId),
+      term, autoProlong: false, name: job.nodeName, parameters,
     }),
   });
-  const server = extractServerInfo(payload);
   const orderId = extractOrderId(payload);
+  if (!orderId) throw new Error("Aeza не вернула идентификатор заказа. Требуется сверка.");
 
   await db.provisioningJob.update({
     where: { id: job.id },
     data: {
-      status: server.ip ? "DNS_PENDING" : "SERVER_ORDERED",
+      status: "SERVER_ORDERED",
       orderId,
-      serverId: server.id,
-      serverIp: server.ip,
-      logs: appendLog(job.logs, "Aeza server order created", {
-        orderId,
-        serverId: server.id,
-        hasIp: Boolean(server.ip),
-      }),
+      logs: appendLog(job.logs, "Aeza server order created", { orderId, cost }),
     },
   });
 }
 
 async function waitForServer(job: ProvisioningJob) {
-  const payload = job.serverId
-    ? await aezaRequest<unknown>(`services/${job.serverId}`, { method: "GET" })
-    : await aezaRequest<unknown>("services", { method: "GET" });
-  const server = extractServerInfo(payload);
+  let serverId = providerId(job.serverId);
+  const orderId = providerId(job.orderId);
+  if (!serverId && orderId) {
+    const order = await aezaRequest<unknown>(`services/orders/${orderId}`);
+    const ids = findDeep(order, ["createdServiceIds"]);
+    if (Array.isArray(ids) && ids.length === 1) serverId = providerId(ids[0]);
+  }
+  const server = serverId
+    ? extractServerInfo(await aezaRequest<unknown>(`services/${serverId}`))
+    : await findAezaServerByName(job.nodeName);
 
-  if (!server.id && !server.ip) {
+  if (!server?.id || (serverId && server.id !== serverId)) {
     throw new Error("Aeza server is not visible yet. Try again in a minute.");
   }
 
@@ -481,86 +529,52 @@ async function timewebRequest<T>(path: string, init: RequestInit = {}) {
       ...(init.headers ?? {}),
     },
     cache: "no-store",
+    redirect: "error",
+    signal: AbortSignal.timeout(12_000),
   });
 
-  const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
-
   if (!response.ok) {
-    const message =
-      typeof payload === "object" && payload && "message" in payload
-        ? String(payload.message)
-        : response.statusText;
-    throw new Error(`Timeweb API ${response.status}: ${message}`);
+    throw new Error(`Timeweb API HTTP ${response.status}`);
   }
 
-  return payload as T;
+  return response.status === 204 ? null : (await response.json()) as T;
 }
 
-function getDnsRecords(payload: unknown) {
-  if (!payload || typeof payload !== "object") {
-    return [];
-  }
-
-  const record = payload as Record<string, unknown>;
-  const direct = record.dns_records ?? record.records ?? record.items;
-  return Array.isArray(direct) ? direct : [];
-}
-
-function readDnsRecord(record: unknown) {
-  if (!record || typeof record !== "object") {
-    return null;
-  }
-
-  const item = record as Record<string, unknown>;
-  const data = item.data && typeof item.data === "object" ? (item.data as Record<string, unknown>) : {};
-
-  return {
-    id: typeof item.id === "string" || typeof item.id === "number" ? String(item.id) : null,
-    type: String(item.type ?? ""),
-    subdomain: String(data.subdomain ?? item.subdomain ?? ""),
-    value: String(data.value ?? item.value ?? ""),
-  };
-}
+const dnsPage = z.object({
+  meta: z.object({ total: z.number().int().nonnegative() }),
+  dns_records: z.array(z.object({
+    id: z.number().int().positive().nullish(), type: z.string(),
+    ttl: z.number().nullable().optional(),
+    data: z.object({ subdomain: z.string().nullish(), value: z.unknown() }),
+  })),
+});
 
 async function ensureDns(job: ProvisioningJob, config: ProvisioningConfig) {
-  if (!job.serverIp) {
-    throw new Error("Server IP is missing.");
+  if (!isPublicIPv4(job.serverIp)) throw new Error("A public server IPv4 address is required.");
+  const target = job.fqdn.toLowerCase().replace(/\.$/, "");
+  const zone = config.timewebDomain.toLowerCase().replace(/\.$/, "");
+  if (!target.endsWith(`.${zone}`)) throw new Error("VPS DNS target is outside the configured zone.");
+  const path = `/api/v1/domains/${encodeURIComponent(zone)}/dns-records`;
+  const matches: z.infer<typeof dnsPage>["dns_records"] = [];
+  for (let offset = 0; ; offset += 100) {
+    const page = dnsPage.parse(await timewebRequest<unknown>(`${path}?limit=100&offset=${offset}`));
+    matches.push(...page.dns_records.filter(({ data, type }) => {
+      const name = data.subdomain?.toLowerCase().replace(/\.$/, "");
+      return name === target && type === "A";
+    }));
+    if (offset + page.dns_records.length >= page.meta.total) break;
+    if (page.dns_records.length < 100 || offset >= 900) {
+      throw new Error("Timeweb returned an incomplete DNS inventory.");
+    }
   }
+  if (matches.length > 1) throw new Error("Несколько A-записей для одной ноды. Требуется ручная сверка.");
 
-  const list = await timewebRequest<unknown>(
-    `/api/v1/domains/${encodeURIComponent(config.timewebDomain)}/dns-records?limit=100&offset=0`,
-    { method: "GET" },
-  );
-  const existing = getDnsRecords(list)
-    .map(readDnsRecord)
-    .find(
-      (record) =>
-        record &&
-        record.type === "A" &&
-        (record.subdomain === job.fqdn || record.subdomain === job.subdomain),
-    );
-
-  if (existing?.id && existing.value !== job.serverIp) {
-    await timewebRequest(
-      `/api/v2/domains/${encodeURIComponent(job.fqdn)}/dns-records/${existing.id}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({
-          type: "A",
-          value: job.serverIp,
-          ttl: config.timewebTtl,
-        }),
-      },
-    );
-  } else if (!existing?.id) {
-    await timewebRequest(`/api/v2/domains/${encodeURIComponent(job.fqdn)}/dns-records`, {
-      method: "POST",
-      body: JSON.stringify({
-        type: "A",
-        value: job.serverIp,
-        ttl: config.timewebTtl,
-      }),
+  const existing = matches[0];
+  if (existing && !existing.id) throw new Error("Timeweb returned an A record without an ID.");
+  if (!existing || existing.data.value !== job.serverIp || existing.ttl !== config.timewebTtl) {
+    await timewebRequest(existing ? `${path}/${existing.id}` : path, {
+      method: existing ? "PATCH" : "POST",
+      body: JSON.stringify({ type: "A", subdomain: target, value: job.serverIp, ttl: config.timewebTtl }),
     });
   }
 
@@ -820,7 +834,7 @@ async function runSshScript(host: string, script: string) {
 
   const { spawn } = await import("node:child_process");
   const user = env.AUTO_PROVISION_SSH_USER ?? "root";
-  const timeoutMs = (env.AUTO_PROVISION_SSH_CONNECT_TIMEOUT_SECONDS ?? 20) * 1000;
+  const timeoutMs = Math.min(env.AUTO_PROVISION_SSH_CONNECT_TIMEOUT_SECONDS ?? 20, 60) * 1000;
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(
@@ -837,17 +851,18 @@ async function runSshScript(host: string, script: string) {
         `${user}@${host}`,
         "bash -s",
       ],
-      { stdio: ["pipe", "pipe", "pipe"] },
+      { stdio: ["pipe", "ignore", "ignore"] },
     );
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
       reject(new Error("SSH install timed out."));
     }, Math.max(timeoutMs, 10_000) + 20 * 60 * 1000);
 
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.stdin.on("error", () => {
+      clearTimeout(timer);
+      child.kill("SIGTERM");
+      reject(new Error("Could not send the SSH installation script."));
+    });
     child.on("error", (error) => {
       clearTimeout(timer);
       reject(error);
@@ -859,13 +874,7 @@ async function runSshScript(host: string, script: string) {
         return;
       }
 
-      reject(
-        new Error(
-          `SSH install failed with code ${code}. ${Buffer.concat(stderr)
-            .toString("utf8")
-            .slice(-1200) || Buffer.concat(stdout).toString("utf8").slice(-1200)}`,
-        ),
-      );
+      reject(new Error(`SSH installation failed with code ${code}.`));
     });
 
     child.stdin.end(script);
@@ -873,8 +882,8 @@ async function runSshScript(host: string, script: string) {
 }
 
 async function installNode(job: ProvisioningJob, config: ProvisioningConfig) {
-  if (!job.serverIp) {
-    throw new Error("Server IP is missing.");
+  if (!isPublicIPv4(job.serverIp)) {
+    throw new Error("A public server IPv4 address is required.");
   }
 
   await updateJobLog(job, "Starting remote node installation", {

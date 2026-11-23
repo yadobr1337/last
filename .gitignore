@@ -41,6 +41,8 @@ dev.stderr.log
 # local databases
 /prisma/*.db
 /prisma/*.db-journal
+/prisma/*.db-wal
+/prisma/*.db-shm
 
 # vercel
 .vercel

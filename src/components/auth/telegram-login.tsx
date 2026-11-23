@@ -59,12 +59,13 @@ export function TelegramLogin({ mode = "login", onLinked }: TelegramLoginProps) 
         callbackUrl: "/dashboard",
       });
 
-      if (result?.error) {
-        setError(result.error);
+      if (!result?.ok || result.error) {
+        setError(result?.error ?? "Не удалось войти через Telegram.");
         return;
       }
 
-      window.location.href = "/dashboard";
+      router.replace("/dashboard");
+      router.refresh();
     };
 
     const script = document.createElement("script");

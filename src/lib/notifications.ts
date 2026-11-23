@@ -1,5 +1,7 @@
-import { NotificationType, type User } from "@prisma/client";
+import { NotificationType, type Prisma, type User } from "@prisma/client";
+import { setTimeout as delay } from "node:timers/promises";
 import { db } from "@/lib/db";
+import { withWorkLease } from "@/lib/work-lease";
 import {
   escapeTelegramHtml,
   sendTelegramMessage,
@@ -11,8 +13,8 @@ export async function notifyUserOnce(params: {
   type: NotificationType;
   cycleKey: string;
   message: string;
-}) {
-  const existing = await db.notificationEvent.findUnique({
+}, tx: Prisma.TransactionClient = db) {
+  return tx.notificationEvent.upsert({
     where: {
       userId_type_cycleKey: {
         userId: params.user.id,
@@ -20,46 +22,75 @@ export async function notifyUserOnce(params: {
         cycleKey: params.cycleKey,
       },
     },
-  });
-
-  if (existing?.success) {
-    return existing;
-  }
-
-  let success = false;
-  let message = "Telegram ID is not linked.";
-
-  if (params.user.telegramId) {
-    const result = await sendTelegramMessage(params.user.telegramId, params.message);
-    success = result.ok;
-    message = result.ok ? "Delivered to Telegram." : result.error;
-  }
-
-  if (existing) {
-    return db.notificationEvent.update({
-      where: { id: existing.id },
-      data: {
-        success,
-        message,
-      },
-    });
-  }
-
-  return db.notificationEvent.create({
-    data: {
+    update: {},
+    create: {
       userId: params.user.id,
       type: params.type,
       cycleKey: params.cycleKey,
-      success,
-      message,
+      message: params.user.telegramId ? null : "Telegram ID is not linked.",
+      deliveryText: params.user.telegramId ? params.message : null,
+      nextAttemptAt: params.user.telegramId ? new Date() : null,
     },
+  });
+}
+
+export async function processNotifications() {
+  await withWorkLease("telegram-delivery", 120_000, async () => {
+    const deadline = Date.now() + 40_000;
+    const events = await db.notificationEvent.findMany({
+      where: { success: false, nextAttemptAt: { lte: new Date() } },
+      include: { user: { select: { telegramId: true } } },
+      orderBy: { nextAttemptAt: "asc" },
+      take: 40,
+    });
+    for (const event of events) {
+      if (Date.now() >= deadline) break;
+      if (!event.user.telegramId || !event.deliveryText || event.attempts >= 4) {
+        await db.notificationEvent.update({
+          where: { id: event.id },
+          data: { nextAttemptAt: null, deliveryText: null, message: "Telegram delivery unavailable or attempts exhausted." },
+        });
+        continue;
+      }
+      const attempt = event.attempts + 1;
+      const reserved = await db.notificationEvent.updateMany({
+        where: { id: event.id, success: false, attempts: event.attempts, nextAttemptAt: { lte: new Date() } },
+        data: { attempts: attempt, nextAttemptAt: new Date(Date.now() + 120_000) },
+      });
+      if (!reserved.count) continue;
+
+      const result = await sendTelegramMessage(event.user.telegramId, event.deliveryText);
+      const status = "status" in result ? result.status : undefined;
+      const retry = !result.ok && attempt < 4 && (status === undefined || status === 429 || status >= 500);
+      await db.notificationEvent.updateMany({
+        where: { id: event.id, attempts: attempt },
+        data: {
+          success: result.ok,
+          message: result.ok ? "Delivered to Telegram." : result.error,
+          nextAttemptAt: retry ? new Date(Date.now() + attempt * 120_000) : null,
+          deliveryText: retry ? event.deliveryText : null,
+        },
+      });
+      if (!result.ok && "status" in result && result.status === 429) break;
+      await delay(80);
+    }
   });
 }
 
 export async function broadcastTelegramMessage(params: {
   text: string;
   photo?: File | null;
+  actor: string;
 }) {
+  return withWorkLease("telegram-broadcast", 60 * 60_000, async () => {
+    await db.adminAuditEvent.create({
+      data: { actor: params.actor, action: "TELEGRAM_BROADCAST", details: { photo: Boolean(params.photo) } },
+    });
+    return deliverTelegramBroadcast(params);
+  });
+}
+
+async function deliverTelegramBroadcast(params: { text: string; photo?: File | null }) {
   const users = await db.user.findMany({
     where: {
       telegramId: {
@@ -89,6 +120,11 @@ export async function broadcastTelegramMessage(params: {
       failed += 1;
       errors.set(result.error, (errors.get(result.error) ?? 0) + 1);
     }
+    if (!result.ok && "status" in result && result.status === 429) {
+      failed = users.length - delivered;
+      break;
+    }
+    await delay(80);
   }
 
   return {

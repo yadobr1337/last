@@ -9,8 +9,10 @@ import {
   DisableUserCommand,
   EnableUserCommand,
   GetInternalSquadByUuidCommand,
+  GetInternalSquadsCommand,
   GetRemnawaveHealthCommand,
   GetUserHwidDevicesCommand,
+  GetUserByUsernameCommand,
   UpdateUserCommand,
 } from "@remnawave/backend-contract";
 import type { Squad, User } from "@prisma/client";
@@ -29,6 +31,16 @@ export type RemnawaveConnectionStatus = {
   uptimeSeconds: number | null;
   message: string;
 };
+
+class RemnawaveHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`Remnawave API HTTP ${status}`);
+  }
+}
+
+function isMissing(error: unknown) {
+  return error instanceof RemnawaveHttpError && error.status === 404;
+}
 
 async function remnawaveRequest<T>({
   path,
@@ -53,26 +65,12 @@ async function remnawaveRequest<T>({
     },
     body: body ? JSON.stringify(body) : undefined,
     cache: "no-store",
+    redirect: "error",
     signal: signal ?? AbortSignal.timeout(15_000),
   });
 
   if (!response.ok) {
-    const responseText = await response.text();
-    let message = responseText;
-
-    try {
-      const payload = JSON.parse(responseText) as {
-        message?: string | string[];
-        error?: string;
-      };
-      message = Array.isArray(payload.message)
-        ? payload.message.join("; ")
-        : payload.message ?? payload.error ?? responseText;
-    } catch {
-      // Keep the original response text when the panel did not return JSON.
-    }
-
-    throw new Error(`Remnawave API ${response.status}: ${message || response.statusText}`);
+    throw new RemnawaveHttpError(response.status);
   }
 
   return (await response.json()) as T;
@@ -175,19 +173,32 @@ export async function ensureRemoteSquad(squad: Pick<Squad, "name" | "remnawaveIn
   if (!inbounds?.length) {
     return null;
   }
+  const result = await remnawaveRequest<GetInternalSquadsCommand.Response>({
+    path: GetInternalSquadsCommand.url,
+    method: "GET",
+  });
+  const current = GetInternalSquadsCommand.ResponseSchema.parse(result).response.internalSquads;
+  const matching = current.find(({ name }) => name === squad.name);
+  if (matching) {
+    if (matching.inbounds.length !== inbounds.length ||
+        !matching.inbounds.every(({ uuid }) => inbounds.includes(uuid))) {
+      throw new Error("Existing Remnawave squad has different inbounds.");
+    }
+    return matching.uuid;
+  }
 
   const body = {
     name: squad.name,
     inbounds,
   };
   CreateInternalSquadCommand.RequestSchema.parse(body);
-  const result = await remnawaveRequest<CreateInternalSquadCommand.Response>({
+  const created = await remnawaveRequest<CreateInternalSquadCommand.Response>({
     path: CreateInternalSquadCommand.url,
     method: "POST",
     body,
   });
 
-  return CreateInternalSquadCommand.ResponseSchema.parse(result).response.uuid;
+  return CreateInternalSquadCommand.ResponseSchema.parse(created).response.uuid;
 }
 
 export async function createRemoteInternalSquad(params: {
@@ -212,9 +223,27 @@ export async function createRemoteInternalSquad(params: {
   return CreateInternalSquadCommand.ResponseSchema.parse(result).response;
 }
 
-function buildRemoteUsername(user: Pick<User, "id" | "email">) {
+export function buildRemoteUsername(user: Pick<User, "id" | "email">) {
   const local = user.email.split("@")[0].replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 20) || "user";
   return `${local}-${user.id.slice(-8)}`.slice(0, 36);
+}
+
+export async function findRemoteUserByUsername(username: string, email: string, knownUuid?: string | null) {
+  if (!isConfigured()) throw new Error("Remnawave is not configured.");
+  try {
+    const result = await remnawaveRequest<GetUserByUsernameCommand.Response>({
+      path: GetUserByUsernameCommand.url(username),
+      method: "GET",
+    });
+    const existing = GetUserByUsernameCommand.ResponseSchema.parse(result).response;
+    if (existing.username !== username || (existing.uuid !== knownUuid && existing.email !== email)) {
+      throw new Error("Remnawave user ownership could not be confirmed.");
+    }
+    return existing;
+  } catch (error) {
+    if (isMissing(error)) return null;
+    throw error;
+  }
 }
 
 export async function provisionRemoteUser(params: {
@@ -226,6 +255,8 @@ export async function provisionRemoteUser(params: {
     | "telegramId"
     | "vpnProvisionState"
     | "remnawaveUserUuid"
+    | "remnawaveUsername"
+    | "remnawaveShortUuid"
     | "subscriptionUrl"
   >;
   squadRemoteUuid?: string | null;
@@ -236,27 +267,7 @@ export async function provisionRemoteUser(params: {
     return null;
   }
 
-  if (params.user.remnawaveUserUuid) {
-    const body = {
-      uuid: params.user.remnawaveUserUuid,
-      email: params.user.email,
-      telegramId: params.user.telegramId ? Number(params.user.telegramId) : null,
-      hwidDeviceLimit: params.hwidDeviceLimit ?? params.user.hwidDeviceLimit ?? undefined,
-      activeInternalSquads: params.squadRemoteUuid ? [params.squadRemoteUuid] : undefined,
-      expireAt: params.expireAt.toISOString(),
-      status: "ACTIVE" as const,
-    };
-    UpdateUserCommand.RequestSchema.parse(body);
-    const result = await remnawaveRequest<UpdateUserCommand.Response>({
-      path: UpdateUserCommand.url,
-      method: "PATCH",
-      body,
-    });
-    return UpdateUserCommand.ResponseSchema.parse(result).response;
-  }
-
-  const body = {
-    username: buildRemoteUsername(params.user),
+  const desired = {
     email: params.user.email,
     telegramId: params.user.telegramId ? Number(params.user.telegramId) : null,
     hwidDeviceLimit: params.hwidDeviceLimit ?? params.user.hwidDeviceLimit ?? undefined,
@@ -264,6 +275,33 @@ export async function provisionRemoteUser(params: {
     expireAt: params.expireAt.toISOString(),
     status: "ACTIVE" as const,
   };
+
+  async function update(uuid: string) {
+    const body = { ...desired, uuid };
+    UpdateUserCommand.RequestSchema.parse(body);
+    const result = await remnawaveRequest<UpdateUserCommand.Response>({
+      path: UpdateUserCommand.url,
+      method: "PATCH",
+      body,
+    });
+    const user = UpdateUserCommand.ResponseSchema.parse(result).response;
+    if (user.uuid !== uuid) throw new Error("Remnawave returned a different user UUID.");
+    return user;
+  }
+
+  if (params.user.remnawaveUserUuid) {
+    try {
+      return await update(params.user.remnawaveUserUuid);
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+  }
+
+  const username = params.user.remnawaveUsername ?? buildRemoteUsername(params.user);
+  const existing = await findRemoteUserByUsername(username, params.user.email, params.user.remnawaveUserUuid);
+  if (existing) return update(existing.uuid);
+
+  const body = { ...desired, username, shortUuid: params.user.remnawaveShortUuid ?? undefined };
   CreateUserCommand.RequestSchema.parse(body);
   const result = await remnawaveRequest<CreateUserCommand.Response>({
     path: CreateUserCommand.url,
@@ -271,7 +309,12 @@ export async function provisionRemoteUser(params: {
     body,
   });
 
-  return CreateUserCommand.ResponseSchema.parse(result).response;
+  const created = CreateUserCommand.ResponseSchema.parse(result).response;
+  if (created.username !== username) throw new Error("Remnawave returned a different username.");
+  if (params.user.remnawaveShortUuid && created.shortUuid !== params.user.remnawaveShortUuid) {
+    throw new Error("Remnawave did not preserve the subscription identifier.");
+  }
+  return created;
 }
 
 export async function enableRemoteUser(remnawaveUserUuid?: string | null) {
@@ -289,7 +332,7 @@ export async function enableRemoteUser(remnawaveUserUuid?: string | null) {
 }
 
 export async function disableRemoteUser(remnawaveUserUuid?: string | null) {
-  if (!isConfigured() || !remnawaveUserUuid) {
+  if (!remnawaveUserUuid) {
     return null;
   }
 
@@ -297,13 +340,16 @@ export async function disableRemoteUser(remnawaveUserUuid?: string | null) {
     path: DisableUserCommand.url(remnawaveUserUuid),
     method: "POST",
     body: { uuid: remnawaveUserUuid },
+  }).catch((error: unknown) => {
+    if (isMissing(error)) return null;
+    throw error;
   });
 
-  return DisableUserCommand.ResponseSchema.parse(result).response;
+  return result ? DisableUserCommand.ResponseSchema.parse(result).response : null;
 }
 
 export async function deleteRemoteUser(remnawaveUserUuid?: string | null) {
-  if (!isConfigured() || !remnawaveUserUuid) {
+  if (!remnawaveUserUuid) {
     return null;
   }
 
@@ -311,9 +357,15 @@ export async function deleteRemoteUser(remnawaveUserUuid?: string | null) {
     path: DeleteUserCommand.url(remnawaveUserUuid),
     method: "DELETE",
     body: { uuid: remnawaveUserUuid },
+  }).catch((error: unknown) => {
+    if (isMissing(error)) return null;
+    throw error;
   });
 
-  return DeleteUserCommand.ResponseSchema.parse(result).response;
+  if (!result) return null;
+  const deleted = DeleteUserCommand.ResponseSchema.parse(result).response;
+  if (!deleted.isDeleted) throw new Error("Remnawave did not confirm deletion.");
+  return deleted;
 }
 
 export async function getRemoteUserDevices(

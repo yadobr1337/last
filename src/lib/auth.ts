@@ -3,24 +3,31 @@ import type { NextAuthOptions } from "next-auth";
 import { getServerSession } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { redirect } from "next/navigation";
-import { db } from "@/lib/db";
+import { db, writeTransaction } from "@/lib/db";
 import { verifyPassword } from "@/lib/passwords";
 import { getSettings } from "@/lib/settings";
 import { ensureUserSquad } from "@/lib/squads";
 import { sendTelegramMessage, verifyTelegramAuth, verifyTelegramMiniAppAuth } from "@/lib/telegram";
 import { DEFAULT_HWID_DEVICE_LIMIT } from "@/lib/site";
 import { ensureUserPublicId } from "@/lib/user-identity";
+import { takeRateLimit } from "@/lib/rate-limit";
+import { env } from "@/lib/env";
 
 async function getSessionUser(userId: string) {
   const user = await db.user.findUnique({
     where: { id: userId },
+    select: {
+      id: true, email: true, role: true, balanceKopeks: true, telegramId: true,
+      subscriptionUrl: true, publicId: true, isEmailPlaceholder: true, emailVerified: true,
+      isBanned: true, authVersion: true,
+    },
   });
 
-  if (!user) {
+  if (!user || user.isBanned) {
     return null;
   }
 
-  const publicId = await ensureUserPublicId(user.id);
+  const publicId = user.publicId ?? await ensureUserPublicId(user.id);
 
   return {
     id: user.id,
@@ -32,6 +39,7 @@ async function getSessionUser(userId: string) {
     publicId,
     isEmailPlaceholder: user.isEmailPlaceholder,
     emailVerified: user.emailVerified?.toISOString() ?? null,
+    authVersion: user.authVersion,
   };
 }
 
@@ -43,11 +51,14 @@ async function upsertTelegramUser(params: {
 }) {
   const placeholderEmail = `telegram-${params.id}@1vpn.local`;
 
-  return db.$transaction(
+  return writeTransaction(
     async (tx) => {
       const existing = await tx.user.findFirst({
         where: {
-          OR: [{ telegramId: params.id }, { email: placeholderEmail }],
+          OR: [
+            { telegramId: params.id },
+            { email: placeholderEmail, isEmailPlaceholder: true, telegramId: null },
+          ],
         },
       });
 
@@ -81,11 +92,11 @@ async function upsertTelegramUser(params: {
       await ensureUserSquad(persisted.id, tx);
       return { persisted, linkedNow };
     },
-    { timeout: 15_000, maxWait: 10_000 },
   );
 }
 
 export const authOptions: NextAuthOptions = {
+  secret: env.NEXTAUTH_SECRET,
   session: {
     strategy: "jwt",
   },
@@ -101,21 +112,23 @@ export const authOptions: NextAuthOptions = {
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        if (!credentials?.email || !credentials.password) {
-          throw new Error("Email and password are required.");
+        const email = credentials?.email?.trim().toLowerCase();
+        if (!email || email.length > 254 || !credentials?.password || credentials.password.length > 128) {
+          return null;
         }
+        if (!await takeRateLimit("password-login", email, 15, 15 * 60_000)) return null;
 
         const user = await db.user.findUnique({
-          where: { email: credentials.email.toLowerCase() },
+          where: { email },
         });
 
-        if (!user?.passwordHash || user.isEmailPlaceholder) {
-          throw new Error("Account not found.");
+        if (!user?.passwordHash || user.isEmailPlaceholder || user.isBanned) {
+          return null;
         }
 
         const isValid = await verifyPassword(credentials.password, user.passwordHash);
         if (!isValid) {
-          throw new Error("Invalid password.");
+          return null;
         }
 
         return getSessionUser(user.id);
@@ -149,6 +162,7 @@ export const authOptions: NextAuthOptions = {
         if (!verification.ok) {
           throw new Error(verification.error);
         }
+        if (!await takeRateLimit("telegram-widget-proof", credentials.hash, 1, 6 * 60_000)) return null;
 
         const { persisted, linkedNow } = await upsertTelegramUser(verification.data);
         if (linkedNow) {
@@ -176,6 +190,8 @@ export const authOptions: NextAuthOptions = {
         if (!verification.ok) {
           throw new Error(verification.error);
         }
+        const hash = new URLSearchParams(initData).get("hash");
+        if (!hash || !await takeRateLimit("telegram-mini-proof", hash, 1, 6 * 60_000)) return null;
 
         const { persisted, linkedNow } = await upsertTelegramUser(verification.data);
         if (linkedNow) {
@@ -200,10 +216,11 @@ export const authOptions: NextAuthOptions = {
       }
 
       const freshUser = await getSessionUser(String(userId));
-      if (!freshUser) {
-        return token;
+      if (!freshUser || (!user && (token.authVersion ?? 0) !== freshUser.authVersion)) {
+        return {};
       }
 
+      token.authVersion = freshUser.authVersion;
       token.role = freshUser.role;
       token.balanceKopeks = freshUser.balanceKopeks;
       token.telegramId = freshUser.telegramId;
@@ -236,7 +253,8 @@ export const authOptions: NextAuthOptions = {
 };
 
 export async function getAuthSession() {
-  return getServerSession(authOptions);
+  const session = await getServerSession(authOptions);
+  return session?.user?.id ? session : null;
 }
 
 export async function requireUser() {

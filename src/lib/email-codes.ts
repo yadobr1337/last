@@ -1,8 +1,11 @@
 import "server-only";
 
 import crypto from "node:crypto";
-import { db } from "@/lib/db";
+import { type Prisma } from "@prisma/client";
+import { writeTransaction } from "@/lib/db";
+import { env } from "@/lib/env";
 import { canSendEmail, sendEmail } from "@/lib/mailer";
+import { takeRateLimit } from "@/lib/rate-limit";
 
 const CODE_TTL_MS = 10 * 60 * 1000;
 
@@ -10,50 +13,35 @@ function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
 }
 
-function hashCode(code: string) {
-  return crypto.createHash("sha256").update(code).digest("hex");
+function hashCode(identifier: string, code: string) {
+  return crypto.createHmac("sha256", env.NEXTAUTH_SECRET)
+    .update("email-code\0")
+    .update(identifier)
+    .update("\0")
+    .update(code)
+    .digest("hex");
 }
 
 function generateCode() {
   return String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
 }
 
-async function saveCode(identifier: string, code: string) {
-  await db.verificationToken.deleteMany({
-    where: { identifier },
+export async function consumeEmailCode(
+  identifier: string,
+  code: string,
+  apply?: (tx: Prisma.TransactionClient) => Promise<unknown>,
+) {
+  const normalizedCode = code.trim();
+  if (!/^\d{6}$/.test(normalizedCode)) return false;
+  if (!await takeRateLimit("email-code-attempt", identifier, 6, CODE_TTL_MS)) return false;
+  return writeTransaction(async (tx) => {
+    const result = await tx.verificationToken.deleteMany({
+      where: { identifier, token: hashCode(identifier, normalizedCode), expires: { gt: new Date() } },
+    });
+    if (!result.count) return false;
+    if (apply) await apply(tx);
+    return true;
   });
-
-  await db.verificationToken.create({
-    data: {
-      identifier,
-      token: hashCode(code),
-      expires: new Date(Date.now() + CODE_TTL_MS),
-    },
-  });
-}
-
-export async function consumeEmailCode(identifier: string, code: string) {
-  const token = await db.verificationToken.findFirst({
-    where: {
-      identifier,
-      token: hashCode(code.trim()),
-      expires: {
-        gt: new Date(),
-      },
-    },
-  });
-
-  if (!token) {
-    return false;
-  }
-
-  await db.verificationToken.delete({
-    where: {
-      token: token.token,
-    },
-  });
-
-  return true;
 }
 
 export async function issueEmailCode(params: {
@@ -69,8 +57,19 @@ export async function issueEmailCode(params: {
 
   const code = generateCode();
   const emailValue = normalizeEmail(params.email);
-
-  await saveCode(params.identifier, code);
+  if (!await takeRateLimit("email-code-send", emailValue, 1, 60_000)) {
+    throw new Error("Email code rate limit exceeded.");
+  }
+  await writeTransaction(async (tx) => {
+    await tx.verificationToken.deleteMany({ where: { identifier: params.identifier } });
+    await tx.verificationToken.create({
+      data: {
+        identifier: params.identifier,
+        token: hashCode(params.identifier, code),
+        expires: new Date(Date.now() + CODE_TTL_MS),
+      },
+    });
+  });
 
   await sendEmail({
     to: emailValue,
@@ -100,8 +99,8 @@ export function buildPasswordResetIdentifier(email: string) {
   return `reset-password:${normalizeEmail(email)}`;
 }
 
-export function buildPasswordChangeIdentifier(userId: string) {
-  return `change-password:${userId}`;
+export function buildPasswordChangeIdentifier(userId: string, email: string) {
+  return `change-password:${userId}:${normalizeEmail(email)}`;
 }
 
 export function buildEmailVerificationIdentifier(userId: string, email: string) {

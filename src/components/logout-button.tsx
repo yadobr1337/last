@@ -8,8 +8,7 @@ export function LogoutButton() {
     <Button
       variant="ghost"
       onClick={async () => {
-        await signOut({ redirect: false });
-        window.location.href = "/";
+        await signOut({ callbackUrl: "/" });
       }}
       type="button"
     >

@@ -5,38 +5,37 @@ import { buildPasswordResetIdentifier, consumeEmailCode } from "@/lib/email-code
 import { hashPassword } from "@/lib/passwords";
 
 const schema = z.object({
-  email: z.string().email(),
-  code: z.string().trim().min(4).max(12),
-  password: z.string().min(8).max(64),
+  email: z.string().trim().max(254).email(),
+  code: z.string().trim().regex(/^\d{6}$/),
+  password: z.string().min(8).max(64).refine((value) => Buffer.byteLength(value) <= 72),
 });
 
 export async function POST(request: Request) {
-  const payload = schema.parse(await request.json());
+  const input = schema.safeParse(await request.json().catch(() => null));
+  if (!input.success) return NextResponse.json({ error: "Проверьте поля формы." }, { status: 400 });
+  const payload = input.data;
   const email = payload.email.toLowerCase();
 
   const user = await db.user.findUnique({
-    where: { email },
+    where: { email, emailVerified: { not: null }, isEmailPlaceholder: false, isBanned: false },
     select: {
       id: true,
-      isEmailPlaceholder: true,
+      authVersion: true,
     },
   });
 
-  if (!user || user.isEmailPlaceholder) {
-    return NextResponse.json({ error: "Аккаунт с таким email не найден." }, { status: 404 });
-  }
-
-  const isValid = await consumeEmailCode(buildPasswordResetIdentifier(email), payload.code);
+  const isValid = user && await consumeEmailCode(buildPasswordResetIdentifier(email), payload.code, async (tx) => {
+    await tx.user.update({
+      where: { id: user.id, email, authVersion: user.authVersion, emailVerified: { not: null }, isBanned: false },
+      data: {
+        passwordHash: await hashPassword(payload.password),
+        authVersion: { increment: 1 },
+      },
+    });
+  });
   if (!isValid) {
     return NextResponse.json({ error: "Неверный или просроченный код." }, { status: 400 });
   }
-
-  await db.user.update({
-    where: { id: user.id },
-    data: {
-      passwordHash: await hashPassword(payload.password),
-    },
-  });
 
   return NextResponse.json({ ok: true });
 }

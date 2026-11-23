@@ -81,6 +81,7 @@ export function AdminOperations({
   maintenanceMessage: string | null;
 }) {
   const [operation, setOperation] = useState<Operation | null>(null);
+  const [grantRequestId, setGrantRequestId] = useState("");
   const mounted = useSyncExternalStore(
     () => () => undefined,
     () => true,
@@ -116,7 +117,10 @@ export function AdminOperations({
           <p className="mt-2 min-h-14 text-sm leading-6 text-zinc-400">
             Добавить каждому пользователю баланс на стоимость указанного количества дней.
           </p>
-          <Button className="mt-5" onClick={() => setOperation("days")}>
+          <Button className="mt-5" onClick={() => {
+            setGrantRequestId(crypto.randomUUID());
+            setOperation("days");
+          }}>
             Открыть
           </Button>
         </Card>
@@ -151,10 +155,11 @@ export function AdminOperations({
       {mounted && operation === "days" ? (
         <OperationModal
           title="Начислить дни всем"
-          description="Сайт добавит каждому пользователю баланс: количество дней × текущая цена за 1 день. Количество устройств здесь не умножается."
+          description="Сайт добавит каждому пользователю сумму на выбранное количество дней с учётом лимита его устройств."
           onClose={() => setOperation(null)}
         >
           <form action={daysAction} className="space-y-4">
+            <input type="hidden" name="requestId" value={grantRequestId} />
             <label className="grid gap-2 text-sm text-zinc-300">
               Количество дней
               <input

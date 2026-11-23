@@ -19,7 +19,6 @@ import { db } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import { checkRemnawaveConnection } from "@/lib/remnawave";
 import { getProvisioningOverview } from "@/lib/provisioning";
-import { ensureAllUsersHavePublicIds } from "@/lib/user-identity";
 import { formatCurrency, formatDays } from "@/lib/utils";
 
 function getVpnStatusLabel(params: {
@@ -109,7 +108,6 @@ export default async function AdminPage({
   searchParams?: SearchParamsInput;
 }) {
   await requireAdmin();
-  await ensureAllUsersHavePublicIds();
 
   const params = searchParams ? await searchParams : {};
   const userQuery = Array.isArray(params.user) ? params.user[0] : params.user;
@@ -125,6 +123,9 @@ export default async function AdminPage({
     todayStats,
     weekStats,
     monthStats,
+    queuedNotifications,
+    failedNotifications,
+    auditEvents,
   ] = await Promise.all([
     getSettings(),
     db.user.aggregate({
@@ -169,6 +170,15 @@ export default async function AdminPage({
     getAdminStats(getPeriodStart(1)),
     getAdminStats(getPeriodStart(7)),
     getAdminStats(getPeriodStart(30)),
+    db.notificationEvent.count({ where: { success: false, nextAttemptAt: { not: null } } }),
+    db.notificationEvent.count({
+      where: { success: false, nextAttemptAt: null, message: { not: "Telegram ID is not linked." } },
+    }),
+    db.adminAuditEvent.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 8,
+      select: { id: true, action: true, actor: true, target: true, createdAt: true },
+    }),
   ]);
 
   const totalBalance = userStats._sum.balanceKopeks ?? 0;
@@ -201,16 +211,32 @@ export default async function AdminPage({
 
         <RemnawaveStatusCard initialStatus={remnawaveStatus} />
         <SiteRestartCard />
+        <Card>
+          <h2 className="text-lg font-semibold text-white">Журнал операций</h2>
+          <p className="mt-2 text-sm text-zinc-400">
+            Telegram · В очереди {queuedNotifications} · Ошибок доставки {failedNotifications}
+          </p>
+          {auditEvents.length ? (
+            <ul className="mt-3 space-y-2 text-sm text-zinc-300">
+              {auditEvents.map((event) => (
+                <li key={event.id} className="break-words">
+                  <time dateTime={event.createdAt.toISOString()}>{event.createdAt.toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })}</time>
+                  {" · "}{event.action}{" · "}{event.actor}{event.target ? ` · ${event.target}` : ""}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </Card>
 
         <Card>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <Badge>Auto provisioning</Badge>
               <h2 className="mt-4 text-2xl font-bold uppercase tracking-[0.08em] text-white">
-                РђРІС‚РѕРїРѕРґРіРѕС‚РѕРІРєР° РЅРѕРґ
+                Автоподготовка нод
               </h2>
               <p className="mt-3 text-sm leading-7 text-zinc-400">
-                РЎР°Р№С‚ РјРѕР¶РµС‚ РєСѓРїРёС‚СЊ VPS РІ Aeza, РїСЂРѕРїРёСЃР°С‚СЊ DNS РІ Timeweb, СЃРѕР·РґР°С‚СЊ РїСЂРѕС„РёР»СЊ, РЅРѕРґСѓ, С…РѕСЃС‚ Рё СЃРєРІР°Рґ РІ Remnawave. РџРѕ СѓРјРѕР»С‡Р°РЅРёСЋ dry-run РЅРµ СЃРїРёСЃС‹РІР°РµС‚ РґРµРЅСЊРіРё.
+                Закупка VPS в Aeza, настройка DNS в Timeweb и подготовка ноды в Remnawave.
               </p>
               <div className="mt-4 flex flex-wrap gap-2 text-xs text-zinc-400">
                 <span className="rounded-full border border-white/10 px-3 py-1">
@@ -234,12 +260,18 @@ export default async function AdminPage({
               </div>
               {provisioning.missing.length ? (
                 <p className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-                  Р”Р»СЏ СЂРµР°Р»СЊРЅРѕРіРѕ Р·Р°РїСѓСЃРєР° РЅРµ С…РІР°С‚Р°РµС‚: {provisioning.missing.join(", ")}
+                  Заполните параметры закупки {provisioning.missing.join(", ")}
                 </p>
               ) : null}
             </div>
             <form action={runProvisioningNowAction}>
-              <PendingButton>Р—Р°РїСѓСЃС‚РёС‚СЊ Р°РІС‚РѕРїРѕРґРіРѕС‚РѕРІРєСѓ</PendingButton>
+              {provisioning.config.enabled && !provisioning.config.dryRun ? (
+                <label className="mb-3 flex gap-2 text-sm text-amber-200">
+                  <input type="checkbox" name="confirmPaidProvisioning" required />
+                  Подтверждаю возможную покупку VPS
+                </label>
+              ) : null}
+              <PendingButton>Запустить автоподготовку</PendingButton>
             </form>
           </div>
 
@@ -275,7 +307,7 @@ export default async function AdminPage({
               ))
             ) : (
               <p className="text-sm text-zinc-400">
-                Р—Р°РґР°С‡Рё РїРѕСЏРІСЏС‚СЃСЏ РїРѕСЃР»Рµ РїРµСЂРІРѕРіРѕ Р·Р°РїСѓСЃРєР° Р°РІС‚РѕРїРѕРґРіРѕС‚РѕРІРєРё.
+                Задачи появятся после первого запуска автоподготовки.
               </p>
             )}
           </div>

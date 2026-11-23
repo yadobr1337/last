@@ -1,0 +1,47 @@
+name: 1VPN checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: file:/tmp/site1vpn-ci.db
+      NEXTAUTH_URL: http://127.0.0.1:3719
+      NEXTAUTH_SECRET: ci-fixture-secret-for-local-use-only
+      AUTO_PROVISION_ENABLED: "false"
+      PAYMENTS_AUTO_APPROVE: "false"
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit
+      - run: npm run prisma:generate
+      - run: npm run prisma:validate
+      - run: npm run prisma:deploy
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run test:http
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: npm audit --omit=dev --audit-level=high
+      - if: always()
+        run: npm audit --audit-level=high
