@@ -72,7 +72,7 @@ export default async function HomePage() {
         <section className="obsidian-wrap hero">
           <div className="hero-copy ui-reveal">
             <div className="hero-kicker"><ShieldCheck size={18} aria-hidden="true" /> 1VPN · Оплата по дням</div>
-            <h1>VPN <span>на&nbsp;каждый день</span></h1>
+            <h1>Твой интернет. <span>Твои правила.</span></h1>
             <p>Подключайтесь по ссылке, выбирайте количество устройств и пополняйте баланс, когда удобно.</p>
             <div className="hero-actions">
               <ButtonLink href={joinHref} prefetch={false} size="lg">{joinLabel}</ButtonLink>

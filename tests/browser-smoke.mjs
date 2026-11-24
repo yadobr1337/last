@@ -158,7 +158,7 @@ export async function runBrowserSmoke(executable, origin, root, { email, admin, 
         edition: edition.textContent,
         color: getComputedStyle(edition).color,
       };
-    }), { title: "VPN на каждый день", edition: "STABLE", color: "rgb(99, 216, 160)" });
+    }), { title: "Твой интернет. Твои правила.", edition: "STABLE", color: "rgb(99, 216, 160)" });
     assert.equal(await evaluate('document.querySelector(".hero-art img").fetchPriority'), "high");
     assert.match(await evaluate('document.querySelector("#faq").textContent'), /24\s*часа/);
     assert.ok(!observedRequests.has(origin + "/api/public/settings"), "SSR prices need no duplicate request");
