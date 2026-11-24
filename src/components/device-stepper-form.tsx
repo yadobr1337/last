@@ -1,39 +1,26 @@
 "use client";
 
 import { useState } from "react";
+import { Minus, Plus } from "lucide-react";
+import { IconButton } from "@/components/ui/button";
 import { PendingButton } from "@/components/ui/pending-button";
 
-type DeviceStepperFormProps = {
+export function DeviceStepperForm({ action, currentValue }: {
   action: (formData: FormData) => Promise<void>;
   currentValue: number;
-};
-
-export function DeviceStepperForm({ action, currentValue }: DeviceStepperFormProps) {
+}) {
   const [value, setValue] = useState(currentValue);
-
   return (
-    <form action={action} className="space-y-4">
+    <form action={action} className="flex flex-wrap items-center gap-2.5">
       <input type="hidden" name="hwidDeviceLimit" value={String(value)} />
-      <div className="inline-flex items-center gap-3 rounded-full border border-white/10 bg-black/30 p-2">
-        <button
-          type="button"
-          onClick={() => setValue((previous) => Math.max(1, previous - 1))}
-          className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-xl text-white transition hover:bg-white/10"
-          aria-label="Уменьшить количество устройств"
-        >
-          -
-        </button>
-        <span className="min-w-12 text-center text-2xl font-bold text-white">{value}</span>
-        <button
-          type="button"
-          onClick={() => setValue((previous) => previous + 1)}
-          className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-xl text-white transition hover:bg-white/10"
-          aria-label="Увеличить количество устройств"
-        >
-          +
-        </button>
+      <div className="inline-flex items-center gap-2 rounded-xl border border-line bg-background p-1.5">
+        <IconButton label="Уменьшить количество устройств" disabled={value <= 1}
+          onClick={() => setValue((previous) => Math.max(1, previous - 1))}><Minus size={18} aria-hidden="true" /></IconButton>
+        <output aria-label="Лимит устройств" className="min-w-8 text-center text-xl font-semibold tabular-nums">{value}</output>
+        <IconButton label="Увеличить количество устройств" disabled={value >= 100}
+          onClick={() => setValue((previous) => Math.min(100, previous + 1))}><Plus size={18} aria-hidden="true" /></IconButton>
       </div>
-      <PendingButton variant="ghost">Сохранить изменения</PendingButton>
+      <PendingButton variant="ghost">Сохранить лимит</PendingButton>
     </form>
   );
 }

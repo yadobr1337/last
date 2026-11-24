@@ -1,5 +1,5 @@
-import Link from "next/link";
 import { Suspense } from "react";
+import { CircleDollarSign, Clock3, Gift, ShieldCheck, Smartphone, Wallet } from "lucide-react";
 import {
   claimTrialAction,
   createYooKassaPaymentAction,
@@ -7,11 +7,15 @@ import {
   updateOwnHwidAction,
 } from "@/app/actions";
 import { BillingModal } from "@/components/billing-modal";
+import { ConsoleShell } from "@/components/console-shell";
 import { CopyButton } from "@/components/copy-button";
 import { DeviceStepperForm } from "@/components/device-stepper-form";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/ui/badge";
+import { ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { ConfirmSubmit } from "@/components/ui/dialog";
+import { EmptyState, ErrorState, Notice, Skeleton } from "@/components/ui/feedback";
+import { PageHeader, SectionHeader, StatCard } from "@/components/ui/page";
 import { PendingButton } from "@/components/ui/pending-button";
 import { requireUser } from "@/lib/auth";
 import { getUserOverview } from "@/lib/billing";
@@ -22,81 +26,42 @@ import { DEFAULT_SUPPORT_TELEGRAM_URL } from "@/lib/site";
 import { formatCurrency, formatDays } from "@/lib/utils";
 import { canUseYooKassa } from "@/lib/yookassa";
 
-function getVpnStatusLabel(
-  balanceKopeks: number,
-  vpnProvisionState: string,
-  isBanned: boolean,
-) {
-  if (isBanned) {
-    return "Заблокирован";
-  }
-
-  if (balanceKopeks <= 0) {
-    return "Ожидает оплаты";
-  }
-
-  if (vpnProvisionState === "ACTIVE") {
-    return "Активный";
-  }
-
-  if (vpnProvisionState === "ERROR") {
-    return "Ошибка панели";
-  }
-
-  return "Синхронизация";
+function subscriptionStatus(balance: number, state: string, banned: boolean) {
+  if (banned) return { label: "Заблокирована", tone: "danger" } as const;
+  if (balance <= 0) return { label: "Ожидает оплаты", tone: "neutral" } as const;
+  if (state === "ACTIVE") return { label: "Активна", tone: "success" } as const;
+  if (state === "ERROR") return { label: "Ошибка панели", tone: "danger" } as const;
+  return { label: "Синхронизация", tone: "warning" } as const;
 }
 
 async function DeviceList({ remnawaveUserUuid }: { remnawaveUserUuid?: string | null }) {
-  let devices: Awaited<ReturnType<typeof getRemoteUserDevices>> = [];
-  let panelUnavailable = false;
-
+  let devices: Awaited<ReturnType<typeof getRemoteUserDevices>>;
   try {
-    devices = await getRemoteUserDevices(
-      remnawaveUserUuid,
-      AbortSignal.timeout(5_000),
-    );
+    devices = await getRemoteUserDevices(remnawaveUserUuid, AbortSignal.timeout(5_000));
   } catch {
-    panelUnavailable = true;
+    return <ErrorState>Панель VPN не ответила. Обновите страницу, чтобы повторить запрос.</ErrorState>;
   }
 
-  if (panelUnavailable) {
-    return (
-      <div className="rounded-2xl border border-amber-400/20 bg-amber-500/5 px-4 py-3 text-sm text-amber-100">
-        Панель долго отвечает. Список устройств не задерживает загрузку кабинета.
-      </div>
-    );
-  }
+  if (!devices.length) return <EmptyState>Устройства появятся после подключения через VPN-приложение.</EmptyState>;
 
-  if (!devices.length) {
-    return (
-      <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-400">
-        Активные устройства появятся после подключений через VPN-панель.
-      </div>
-    );
-  }
-
-  return devices.map((device) => (
-    <div
-      key={device.hwid}
-      className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
-    >
-      <div>
-        <p className="text-sm font-semibold text-white">
-          {device.deviceModel || device.platform || `Устройство ${device.hwid.slice(0, 8)}`}
-        </p>
-        <p className="mt-1 text-xs text-zinc-500">HWID: {device.hwid}</p>
-        <p className="mt-1 text-xs text-zinc-500">
-          Последний вход: {device.updatedAt.toLocaleString("ru-RU")}
-        </p>
-      </div>
-      <form action={deleteOwnHwidDeviceAction}>
-        <input type="hidden" name="hwid" value={device.hwid} />
-        <Button variant="danger" type="submit">
-          Удалить
-        </Button>
-      </form>
-    </div>
-  ));
+  return (
+    <ul className="grid gap-2">
+      {devices.map((device) => (
+        <li key={device.hwid} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-black/20 px-3 py-3">
+          <div className="min-w-0">
+            <p className="font-semibold">{device.deviceModel || device.platform || "Устройство " + device.hwid.slice(0, 8)}</p>
+            <p className="break-all font-mono text-xs text-subtle">HWID {device.hwid}</p>
+            <p className="mt-1 text-sm text-muted">Последний вход {device.updatedAt.toLocaleString("ru-RU")}</p>
+          </div>
+          <form action={deleteOwnHwidDeviceAction}>
+            <input type="hidden" name="hwid" value={device.hwid} />
+            <ConfirmSubmit size="sm" variant="danger" label="Удалить устройство"
+              message="Устройство будет удалено из списка VPN. При необходимости его можно подключить заново.">Удалить</ConfirmSubmit>
+          </form>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 export default async function DashboardPage() {
@@ -131,246 +96,110 @@ export default async function DashboardPage() {
     overview.settings.supportTelegramUrl ??
     DEFAULT_SUPPORT_TELEGRAM_URL;
 
+
+  const status = subscriptionStatus(
+    overview.user.balanceKopeks, overview.user.vpnProvisionState, overview.user.isBanned,
+  );
+  const subscriptionUrl = overview.user.subscriptionUrl;
+  const dailyPrice = overview.settings.pricePerDayKopeks;
+
   return (
-    <main className="dashboard-shell min-h-screen px-4 py-4 sm:px-6 sm:py-6">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <header className="flex flex-col gap-4 rounded-[28px] border border-white/10 bg-white/5 p-5 backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <Badge>Client dashboard</Badge>
-            <h1 className="mt-4 text-3xl font-bold uppercase tracking-[0.08em] text-white">
-              {publicId}
-            </h1>
-            <p className="mt-2 text-sm text-zinc-400">
-              {hasRealEmail ? overview.user.email : "Email не привязан"}
-            </p>
+    <ConsoleShell area="dashboard" isAdmin={session.user.role === "ADMIN"}>
+      <PageHeader title="Подписка и баланс" description={
+        <><span>ID {publicId}</span> · {hasRealEmail ? overview.user.email : "Email не привязан"}</>
+      }>
+        <BillingModal paymentsEnabled={canUseYooKassa()} topUpAction={createYooKassaPaymentAction}
+          transactions={transactions.map((transaction) => ({
+            id: transaction.id,
+            description: transaction.description,
+            amount: formatCurrency(transaction.amountKopeks),
+            createdAt: transaction.createdAt.toLocaleString("ru-RU"),
+          }))} />
+      </PageHeader>
+
+      <section className="console-stats" aria-label="Показатели подписки">
+        <StatCard label="Баланс" value={formatCurrency(overview.user.balanceKopeks)}
+          icon={<Wallet size={19} aria-hidden="true" />} />
+        <StatCard label="Осталось дней" value={formatDays(overview.remainingDays)}
+          icon={<Clock3 size={19} aria-hidden="true" />} />
+        <StatCard label="Расход в день" value={formatCurrency(dailyPrice * overview.effectiveHwidDeviceLimit)}
+          icon={<CircleDollarSign size={19} aria-hidden="true" />}>
+          {formatCurrency(dailyPrice)} за устройство
+        </StatCard>
+      </section>
+
+      {emailNeedsVerification ? <aside>
+        <Notice className="flex-wrap items-center justify-between" tone="warning">
+          <span>{!hasRealEmail ? "Добавьте email для восстановления доступа и уведомлений." : "Подтвердите email кодом из письма."}</span>
+          <ButtonLink href="/dashboard/account#email" size="sm" variant="ghost">Настройки email</ButtonLink>
+        </Notice>
+      </aside> : null}
+      {overview.user.isBanned ? <aside><ErrorState>Аккаунт заблокирован. VPN-доступ приостановлен.</ErrorState></aside> : null}
+
+      <section className="console-grid" aria-label="Подключение и устройства">
+        <Card id="connection" className="connection-panel console-section space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="benefit-icon"><ShieldCheck size={23} aria-hidden="true" /></div>
+            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
           </div>
-          <div className="flex flex-wrap gap-3">
-            <Link href="/">
-              <Button variant="ghost">Главная</Button>
-            </Link>
-            <Link href="/dashboard/account">
-              <Button variant="ghost">Настройки аккаунта</Button>
-            </Link>
-            {session.user.role === "ADMIN" ? (
-              <Link href="/admin">
-                <Button variant="ghost">Админ</Button>
-              </Link>
-            ) : null}
+          <SectionHeader title="Подключение к VPN" description="Ссылка доступа к вашей подписке." />
+          {subscriptionUrl ? (
+            <>
+              <code className="subscription-link">{subscriptionUrl}</code>
+              <div className="flex flex-wrap gap-2">
+                <ButtonLink href={subscriptionUrl} target="_blank" rel="noreferrer">Подключиться</ButtonLink>
+                <CopyButton value={subscriptionUrl} />
+              </div>
+            </>
+          ) : <EmptyState>Ссылка появится после пополнения или активации пробного периода и синхронизации с VPN-панелью.</EmptyState>}
+          <details className="faq-item">
+            <summary>Инструкция по подключению</summary>
+            <ol className="faq-answer list-decimal space-y-1 pl-5">
+              <li>Откройте VPN-приложение с поддержкой ссылок подписок.</li>
+              <li>Скопируйте вашу ссылку из кабинета и добавьте её в приложение.</li>
+              <li>Выберите доступный сервер в приложении и включите VPN.</li>
+            </ol>
+          </details>
+        </Card>
+
+        <Card id="devices" className="console-section space-y-4">
+          <div className="benefit-icon"><Smartphone size={22} aria-hidden="true" /></div>
+          <SectionHeader title="Устройства" description="Управляйте лимитом и удаляйте ненужные устройства." />
+          <DeviceStepperForm action={updateOwnHwidAction} currentValue={overview.effectiveHwidDeviceLimit} />
+          <Suspense fallback={<div role="status" className="grid gap-2"><span className="text-sm text-muted">Загружаем устройства…</span><Skeleton className="h-16" /></div>}>
+            <DeviceList remnawaveUserUuid={overview.user.remnawaveUserUuid} />
+          </Suspense>
+        </Card>
+      </section>
+
+      {canClaimTrial ? <section>
+        <Card className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <span className="benefit-icon shrink-0"><Gift size={21} aria-hidden="true" /></span>
+            <div>
+              <h2 className="text-lg font-semibold">Пробный период</h2>
+              <p className="mt-1 text-sm text-muted">{overview.settings.trialDays} дн. доступа после подтверждения Telegram.</p>
+            </div>
           </div>
-        </header>
+          {hasLinkedTelegram ? <form action={claimTrialAction}><PendingButton>Активировать пробный период</PendingButton></form>
+            : <ButtonLink href="/dashboard/account#telegram" variant="ghost">Привязать Telegram</ButtonLink>}
+        </Card>
+      </section> : null}
 
-        {!hasRealEmail || emailNeedsVerification ? (
-          <Card className="border-cyan-300/20 bg-cyan-400/8">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <p className="text-sm font-semibold uppercase tracking-[0.22em] text-cyan-200">
-                  Email
-                </p>
-                <p className="mt-2 text-sm leading-7 text-zinc-200">
-                  {!hasRealEmail
-                    ? "Добавьте email в настройках аккаунта. Без него недоступны восстановление пароля и часть уведомлений."
-                    : "Подтвердите email кодом из письма, чтобы использовать уведомления и восстановление пароля."}
-                </p>
-              </div>
-              <Link href="/dashboard/account">
-                <Button>Открыть настройки</Button>
-              </Link>
-            </div>
-          </Card>
-        ) : null}
-
-        {overview.user.isBanned ? (
-          <Card className="border-red-400/20 bg-red-500/10">
-            <div className="flex flex-col gap-2">
-              <p className="text-sm font-semibold uppercase tracking-[0.22em] text-red-200">
-                Блокировка
-              </p>
-              <p className="text-sm leading-7 text-zinc-100">
-                Ваш аккаунт заблокирован администратором. Доступ к VPN приостановлен до разбана.
-              </p>
-            </div>
-          </Card>
-        ) : null}
-
-        <section className="grid gap-4 lg:grid-cols-[1.12fr_0.88fr]">
-          <Card className="space-y-5">
-            <Badge>Подписка</Badge>
-            <div className="space-y-4">
-              <div>
-                <h2 className="text-2xl font-bold uppercase tracking-[0.08em] text-white">
-                  Ссылка доступа
-                </h2>
-                <p className="mt-2 text-sm text-zinc-400">
-                  Откройте подписку напрямую или скопируйте ссылку в приложение.
-                </p>
-              </div>
-              {overview.user.subscriptionUrl ? (
-                <>
-                  <div className="rounded-3xl border border-white/10 bg-black/25 p-4">
-                    <p className="break-all font-mono text-xs leading-6 text-cyan-200">
-                      {overview.user.subscriptionUrl}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-3">
-                    <a
-                      href={overview.user.subscriptionUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex h-11 items-center justify-center rounded-full border border-cyan-300/40 bg-cyan-400/15 px-5 text-sm font-medium text-cyan-100 transition duration-300 hover:-translate-y-0.5 hover:border-cyan-300/70 hover:bg-cyan-400/25"
-                    >
-                      Подключиться
-                    </a>
-                    <CopyButton value={overview.user.subscriptionUrl} />
-                  </div>
-                </>
-              ) : (
-                <p className="text-sm leading-7 text-zinc-400">
-                  Ссылка появится после оплаты и успешной синхронизации с VPN-панелью.
-                </p>
-              )}
-            </div>
-          </Card>
-
-          <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-1">
-            <Card>
-              <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">Баланс</p>
-              <p className="mt-3 text-3xl font-bold text-white">
-                {formatCurrency(overview.user.balanceKopeks)}
-              </p>
-            </Card>
-            <Card>
-              <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">Остаток дней</p>
-              <p className="mt-3 text-3xl font-bold text-white">{formatDays(overview.remainingDays)}</p>
-            </Card>
-            <Card>
-              <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">Статус VPN</p>
-              <p className="mt-3 text-xl font-bold text-white">
-                {getVpnStatusLabel(
-                  overview.user.balanceKopeks,
-                  overview.user.vpnProvisionState,
-                  overview.user.isBanned,
-                )}
-              </p>
-            </Card>
+      <section id="support" className="console-grid console-section" aria-label="Условия и поддержка">
+        <Card>
+          <SectionHeader title="Условия подписки" />
+          <p className="text-muted leading-relaxed">При нулевом балансе доступ приостанавливается. Пополните его в течение {overview.settings.deletionGraceHours} ч, чтобы сохранить ссылку.</p>
+          <p className="mt-2 text-sm text-subtle">Telegram {overview.user.telegramId ?? "не привязан"}</p>
+        </Card>
+        <Card>
+          <SectionHeader title="Поддержка" />
+          <div className="flex flex-wrap gap-2">
+            {supportTelegramUrl ? <ButtonLink href={supportTelegramUrl} target="_blank" rel="noreferrer" variant="ghost">Telegram</ButtonLink> : null}
+            {env.SUPPORT_EMAIL ? <ButtonLink href={"mailto:" + env.SUPPORT_EMAIL} variant="ghost">{env.SUPPORT_EMAIL}</ButtonLink> : null}
           </div>
-        </section>
-
-        <section className="grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
-          <Card className="space-y-5">
-            <Badge>Баланс</Badge>
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <h2 className="text-2xl font-bold uppercase tracking-[0.08em] text-white">
-                  Пополнение
-                </h2>
-                <p className="mt-2 text-sm leading-7 text-zinc-400">
-                  Пополняйте баланс и следите за всеми операциями в удобном отдельном разделе.
-                </p>
-              </div>
-              <BillingModal
-                paymentsEnabled={canUseYooKassa()}
-                topUpAction={createYooKassaPaymentAction}
-                transactions={transactions.map((transaction) => ({
-                  id: transaction.id,
-                  description: transaction.description,
-                  amount: formatCurrency(transaction.amountKopeks),
-                  createdAt: transaction.createdAt.toLocaleString("ru-RU"),
-                }))}
-              />
-            </div>
-          </Card>
-
-          <Card className="space-y-5">
-            <Badge>Устройства</Badge>
-            <div className="space-y-4">
-              <div>
-                <h2 className="text-2xl font-bold uppercase tracking-[0.08em] text-white">
-                  Устройства и лимиты
-                </h2>
-                <p className="mt-2 text-sm leading-7 text-zinc-400">
-                  Управляйте количеством подключённых устройств и отключайте ненужные.
-                </p>
-              </div>
-
-              <DeviceStepperForm
-                action={updateOwnHwidAction}
-                currentValue={overview.effectiveHwidDeviceLimit}
-              />
-
-              <div className="space-y-3">
-                <Suspense
-                  fallback={
-                    <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-400">
-                      Загружаем устройства...
-                    </div>
-                  }
-                >
-                  <DeviceList remnawaveUserUuid={overview.user.remnawaveUserUuid} />
-                </Suspense>
-              </div>
-            </div>
-          </Card>
-        </section>
-
-        {canClaimTrial ? (
-          <section>
-            <Card className="space-y-5">
-              <Badge>Бонус</Badge>
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <h2 className="text-2xl font-bold uppercase tracking-[0.08em] text-white">
-                    Пробный день
-                  </h2>
-                  <p className="mt-2 text-sm leading-7 text-zinc-400">
-                    Один раз можно получить баланс на 1 день. Для активации нужно привязать
-                    Telegram.
-                  </p>
-                </div>
-
-                {hasLinkedTelegram ? (
-                  <form action={claimTrialAction}>
-                    <PendingButton>Получить пробный день</PendingButton>
-                  </form>
-                ) : (
-                  <Link href="/dashboard/account">
-                    <Button>Привязать Telegram</Button>
-                  </Link>
-                )}
-              </div>
-            </Card>
-          </section>
-        ) : null}
-
-        <section className="grid gap-4 lg:grid-cols-[1fr_1fr]">
-          <Card>
-            <Badge>Инфо</Badge>
-            <div className="mt-4 space-y-2 text-sm text-zinc-300">
-              <p>Цена за день: {formatCurrency(overview.settings.pricePerDayKopeks)}</p>
-              <p>Telegram: {overview.user.telegramId ?? "не привязан"}</p>
-              <p>
-                При нулевом балансе ссылка отключается и удаляется через{" "}
-                {overview.settings.deletionGraceHours} ч.
-              </p>
-            </div>
-          </Card>
-
-          <Card>
-            <Badge>Поддержка</Badge>
-            <div className="mt-4 flex flex-wrap gap-3">
-              {supportTelegramUrl ? (
-                <Link href={supportTelegramUrl} target="_blank" rel="noreferrer">
-                  <Button>Telegram</Button>
-                </Link>
-              ) : null}
-              {env.SUPPORT_EMAIL ? (
-                <Link href={`mailto:${env.SUPPORT_EMAIL}`}>
-                  <Button variant="ghost">{env.SUPPORT_EMAIL}</Button>
-                </Link>
-              ) : null}
-            </div>
-          </Card>
-        </section>
-      </div>
-    </main>
+        </Card>
+      </section>
+    </ConsoleShell>
   );
 }

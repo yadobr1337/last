@@ -1,314 +1,146 @@
-import Image from "next/image";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import Link from "next/link";
+import { Cable, Globe2, Laptop, Plus, ShieldCheck, Wallet } from "lucide-react";
+import { Brand } from "@/components/brand";
+import { MobileNavigation } from "@/components/mobile-navigation";
 import { MaintenanceScreen } from "@/components/maintenance-screen";
+import { OneVpnNetworkLogo } from "@/components/one-vpn-network-logo";
 import { PublicPricing } from "@/components/public-pricing";
+import { ButtonLink } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { getAuthSession } from "@/lib/auth";
 import { env } from "@/lib/env";
 import { getSettings } from "@/lib/settings";
-import {
-  DEFAULT_OFFER_URL,
-  DEFAULT_PRIVACY_URL,
-  DEFAULT_SUPPORT_TELEGRAM_URL,
-  PUBLIC_BILLING_MONTH_DAYS,
-  siteConfig,
-} from "@/lib/site";
+import { DEFAULT_OFFER_URL, DEFAULT_PRIVACY_URL, DEFAULT_SUPPORT_TELEGRAM_URL } from "@/lib/site";
+import { formatCurrency } from "@/lib/utils";
 
-function Link(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) {
-  return <a {...props} />;
-}
+const sections = [
+  { href: "#benefits", label: "Возможности" },
+  { href: "#pricing", label: "Тариф" },
+  { href: "#faq", label: "Вопросы" },
+];
 
-function ScrollReveal({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-  delay?: 1 | 2 | 3;
-}) {
-  return <div className={className}>{children}</div>;
-}
-
-const features = [
-  {
-    title: "Молниеносная скорость",
-    text: "Смотри, играй и загружай без лагов. Оптимизированные сервера держат высокий темп без лишней нагрузки.",
-    className: "feature-card feature-speed",
-    visual: (
-      <div className="feature-speed-visual" aria-hidden>
-        <span />
-        <span />
-        <span />
-      </div>
-    ),
-  },
-  {
-    title: "Безопасный доступ",
-    text: "Подключился и сразу работаешь в защищенном туннеле. Шифрование включается без ручной настройки.",
-    className: "feature-card feature-lock",
-    visual: (
-      <div className="feature-lock-visual" aria-hidden>
-        <div className="feature-lock-shackle" />
-        <div className="feature-lock-body" />
-      </div>
-    ),
-  },
-  {
-    title: "Интернет без границ",
-    text: "Сервисы, сайты и приложения открываются так, как будто ты уже находишься в нужной стране.",
-    className: "feature-card feature-globe",
-    visual: (
-      <div className="feature-globe-visual" aria-hidden>
-        <div className="feature-globe-core" />
-        <div className="feature-globe-ring feature-globe-ring-one" />
-        <div className="feature-globe-ring feature-globe-ring-two" />
-      </div>
-    ),
-  },
-  {
-    title: "Умное подключение",
-    text: "Система выбирает лучший сервер для стабильного соединения и аккуратно держит качество канала.",
-    className: "feature-card feature-smart",
-    visual: (
-      <div className="feature-smart-visual" aria-hidden>
-        <span className="feature-smart-dot" />
-        <span className="feature-smart-dot" />
-        <span className="feature-smart-dot" />
-      </div>
-    ),
-  },
-  {
-    title: "Полная приватность",
-    text: "Зашифрованное подключение и управление доступом из личного кабинета.",
-    className: "feature-card feature-privacy",
-    visual: (
-      <div className="feature-privacy-visual" aria-hidden>
-        <span />
-      </div>
-    ),
-  },
+const benefits = [
+  { title: "Зашифрованное подключение", description: "Подключайтесь через VPN-туннель. Доступ, баланс и ссылка подписки собраны в личном кабинете.", icon: ShieldCheck },
+  { title: "Быстрый старт", description: "Получите ссылку подписки и добавьте её в совместимое VPN-приложение.", icon: Cable },
+  { title: "Доступ к сети", description: "Открывайте повседневные сайты, сервисы и приложения через VPN.", icon: Globe2 },
+  { title: "Ваши устройства", description: "Меняйте лимит и удаляйте устройства, которыми больше не пользуетесь.", icon: Laptop },
+  { title: "Гибкое пополнение", description: "Выбирайте сумму пополнения и следите за остатком в кабинете.", icon: Wallet },
 ];
 
 export default async function HomePage() {
   const [session, settings] = await Promise.all([getAuthSession(), getSettings()]);
-
-  if (settings.maintenanceEnabled && session?.user.role !== "ADMIN") {
-    return (
-      <MaintenanceScreen
-        message={settings.maintenanceMessage}
-        showLogin={!session?.user}
-        showLogout={Boolean(session?.user)}
-      />
-    );
+  const isAdmin = session?.user.role === "ADMIN";
+  if (settings.maintenanceEnabled && !isAdmin) {
+    return <MaintenanceScreen message={settings.maintenanceMessage}
+      showLogin={!session?.user} showLogout={Boolean(session?.user)} />;
   }
 
+  const joinHref = session?.user ? "/dashboard" : "/register";
+  const joinLabel = session?.user ? "Открыть кабинет" : "Подключиться";
+  const mobileLinks = [...sections, ...(isAdmin ? [{ href: "/admin", label: "Админка" }] : []),
+    ...(!session?.user ? [{ href: "/login", label: "Войти" }] : []), { href: joinHref, label: joinLabel }];
   const offerUrl = env.NEXT_PUBLIC_OFFER_URL ?? DEFAULT_OFFER_URL;
   const privacyUrl = env.NEXT_PUBLIC_PRIVACY_URL ?? DEFAULT_PRIVACY_URL;
-  const supportTelegramUrl = settings.supportTelegramUrl ?? env.NEXT_PUBLIC_SUPPORT_TELEGRAM_URL ?? DEFAULT_SUPPORT_TELEGRAM_URL;
+  const supportUrl = settings.supportTelegramUrl ?? env.NEXT_PUBLIC_SUPPORT_TELEGRAM_URL ?? DEFAULT_SUPPORT_TELEGRAM_URL;
+  const questions = [
+    { question: "Как подключить VPN?", answer: "Войдите в личный кабинет и пополните баланс. Когда подписка будет готова, откройте ссылку или скопируйте её в приложение, которое поддерживает ссылки подписки." },
+    { question: "Как рассчитывается стоимость?", answer: "Оплата посуточная. Расход зависит от цены за день и выбранного вами лимита устройств. Текущий баланс и примерный остаток времени видны в кабинете." },
+    { question: "Как получить пробный доступ?", answer: "Создайте аккаунт и подтвердите Telegram через бота. После этого в кабинете можно один раз активировать пробный период." },
+    { question: "Что произойдёт, когда баланс закончится?", answer: "VPN-доступ приостановится. Пополните баланс в течение " + settings.deletionGraceHours + " ч, чтобы сохранить подписку." },
+  ];
 
   return (
-    <main className="grid-overlay overflow-hidden">
-      <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-3 py-3 sm:px-6 sm:py-5 lg:px-10">
-        <ScrollReveal>
-          <header className="flex items-center justify-between gap-3 rounded-[28px] border border-white/10 bg-white/5 px-4 py-3 backdrop-blur-xl sm:px-5 sm:py-4">
-            <Link href="/" className="min-w-0">
-              <div className="flex items-center gap-2.5 sm:gap-3">
-                <span
-                  className="glitch shrink-0 text-[1.75rem] font-black tracking-[0.16em] text-white sm:text-[2rem] sm:tracking-[0.24em]"
-                  data-text="1VPN"
-                >
-                  1VPN
-                </span>
-                <span className="hidden text-[11px] uppercase tracking-[0.28em] text-zinc-500 md:block">
-                  {siteConfig.tagline}
-                </span>
-              </div>
-            </Link>
-
-            <div className="flex max-w-[72%] flex-wrap justify-end gap-2">
-              {session?.user ? (
-                <>
-                  {session.user.role === "ADMIN" ? (
-                    <Link href="/admin">
-                      <Button variant="ghost" size="sm" className="px-3 sm:px-4">
-                        Админка
-                      </Button>
-                    </Link>
-                  ) : null}
-                  <Link href="/dashboard">
-                    <Button size="sm" className="px-3 sm:px-4">
-                      Личный кабинет
-                    </Button>
-                  </Link>
-                </>
-              ) : (
-                <>
-                  <Link href="/login">
-                    <Button variant="ghost" size="sm" className="px-3 sm:px-4">
-                      Войти
-                    </Button>
-                  </Link>
-                  <Link href="/register">
-                    <Button size="sm" className="px-3 sm:px-4">
-                      Регистрация
-                    </Button>
-                  </Link>
-                </>
-              )}
-            </div>
-          </header>
-        </ScrollReveal>
-
-        <section className="relative grid flex-1 items-center gap-6 py-6 sm:gap-10 sm:py-10 lg:grid-cols-[1.02fr_0.98fr] lg:py-16">
-          <div className="order-1 space-y-5 sm:space-y-7">
-            <div className="space-y-3 sm:space-y-4">
-              <ScrollReveal>
-                <Badge className="px-3 py-1 text-[10px] tracking-[0.28em] sm:text-xs">
-                  PRIVATE VPN / SECURE CONNECTION
-                </Badge>
-              </ScrollReveal>
-              <ScrollReveal delay={1}>
-                <h1 className="max-w-4xl text-[clamp(2.65rem,11vw,5.4rem)] font-black uppercase leading-[0.88] tracking-[0.05em] sm:tracking-[0.08em]">
-                  <span className="bg-[linear-gradient(180deg,#f5f9ff_0%,#deebf8_38%,#8edfff_72%,#5ea8ff_100%)] bg-clip-text text-transparent">
-                    Безопасный доступ в пару тапов
-                  </span>
-                </h1>
-              </ScrollReveal>
-              <ScrollReveal delay={2}>
-                <p className="max-w-2xl text-[15px] leading-7 text-zinc-300 sm:text-lg sm:leading-8">
-                  Безопасный VPN-доступ без сложных настроек: подключение за пару кликов,
-                  удобное продление и контроль устройств.
-                </p>
-              </ScrollReveal>
-            </div>
-
-            <ScrollReveal delay={3}>
-              <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
-                {session?.user ? (
-                  <Link href="/dashboard">
-                    <Button size="sm" className="h-10 px-4 sm:h-12 sm:px-6">
-                      Открыть кабинет
-                    </Button>
-                  </Link>
-                ) : (
-                  <Link href="/register">
-                    <Button size="sm" className="h-10 px-6 sm:h-12 sm:px-8">
-                      Попробовать
-                    </Button>
-                  </Link>
-                )}
-              </div>
-            </ScrollReveal>
-
-            <ScrollReveal>
-              <PublicPricing
-                monthlyPriceKopeks={settings.pricePerDayKopeks * PUBLIC_BILLING_MONTH_DAYS}
-                trialDays={settings.trialDays}
-              />
-            </ScrollReveal>
+    <>
+      <header className="site-header">
+        <div className="obsidian-wrap site-header-inner">
+          <Brand />
+          <nav aria-label="Разделы сайта" className="site-links">
+            {sections.map((item) => <a key={item.href} href={item.href}>{item.label}</a>)}
+          </nav>
+          <div className="site-actions">
+            {isAdmin && <Link href="/admin" className="site-login-link">Админка</Link>}
+            {!session?.user && <Link href="/login" className="site-login-link" prefetch={false}>Войти</Link>}
+            <ButtonLink href={joinHref} prefetch={false} size="sm">{joinLabel}</ButtonLink>
           </div>
+          <MobileNavigation links={mobileLinks} />
+        </div>
+      </header>
 
-          <div className="order-2">
-            <ScrollReveal delay={1}>
-              <div className="hero-glow mx-auto max-w-[440px] sm:max-w-[560px]">
-                <Card className="overflow-hidden rounded-[28px] p-0 sm:rounded-[32px]">
-                  <div className="border-b border-white/10 bg-[linear-gradient(90deg,rgba(93,214,255,0.1),transparent)] px-4 py-3 sm:px-6 sm:py-4">
-                    <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-zinc-400 sm:text-xs sm:tracking-[0.28em]">
-                      live preview / protected tunnel
-                    </p>
-                  </div>
-                  <div className="relative p-4 sm:p-6">
-                    <Image
-                      src="/logo-main-mobile.jpg"
-                      alt="1VPN logo"
-                      width={1120}
-                      height={611}
-                      className="rounded-[18px] opacity-90 sm:rounded-[24px]"
-                      unoptimized
-                      fetchPriority="high"
-                      loading="eager"
-                    />
-                    <div className="pointer-events-none absolute inset-4 rounded-[18px] border border-white/10 sm:inset-6 sm:rounded-[24px]" />
-                  </div>
+      <main id="main-content">
+        <section className="obsidian-wrap hero">
+          <div className="hero-copy ui-reveal">
+            <div className="hero-kicker"><ShieldCheck size={18} aria-hidden="true" /> VPN с посуточной оплатой</div>
+            <h1>Твой интернет. <span>Твои правила.</span></h1>
+            <p>Быстрое и удобное подключение к VPN с управлением подпиской в одном личном кабинете.</p>
+            <div className="hero-actions">
+              <ButtonLink href={joinHref} prefetch={false} size="lg">{joinLabel}</ButtonLink>
+              <a href="#benefits" className="ui-button ui-button-ghost ui-button-lg">Узнать больше</a>
+            </div>
+            <div className="hero-price">{formatCurrency(settings.pricePerDayKopeks)} в день за устройство</div>
+          </div>
+          <div className="hero-art ui-reveal ui-delay">
+            <OneVpnNetworkLogo eager />
+          </div>
+        </section>
+
+        <section id="benefits" className="site-section">
+          <div className="obsidian-wrap">
+            <div className="site-section-heading">
+              <h2>VPN под вашим контролем</h2>
+              <p>Подключение, подписка и устройства в одном месте.</p>
+            </div>
+            <div className="benefits">
+              {benefits.map(({ title, description, icon: Icon }) => (
+                <Card className="benefit" key={title}>
+                  <div className="benefit-icon"><Icon size={22} aria-hidden="true" /></div>
+                  <h3>{title}</h3>
+                  <p>{description}</p>
                 </Card>
-              </div>
-            </ScrollReveal>
-          </div>
-        </section>
-
-        <section className="deferred-section pb-6 sm:pb-8">
-          <ScrollReveal>
-            <div className="mb-4 flex items-end justify-between gap-4 sm:mb-5">
-              <div>
-                <Badge className="px-3 py-1 text-[10px] tracking-[0.28em] sm:text-xs">Преимущества</Badge>
-                <h2 className="mt-2.5 text-2xl font-bold uppercase tracking-[0.05em] text-white sm:mt-3 sm:text-3xl sm:tracking-[0.08em]">
-                  Почему это удобно
-                </h2>
-              </div>
+              ))}
             </div>
-          </ScrollReveal>
-
-          <div className="grid gap-3 sm:gap-4 md:grid-cols-2 xl:grid-cols-5">
-            {features.map((feature, index) => (
-              <ScrollReveal key={feature.title} delay={((index % 3) + 1) as 1 | 2 | 3}>
-                <Card className={`${feature.className} card-lift rounded-[24px] p-4 sm:rounded-[28px] sm:p-6`}>
-                  <div className="feature-visual">{feature.visual}</div>
-                  <h3 className="mt-4 text-base font-semibold text-white sm:mt-6 sm:text-lg">
-                    {feature.title}
-                  </h3>
-                  <p className="mt-2.5 text-sm leading-6 text-zinc-400 sm:mt-3 sm:leading-7">
-                    {feature.text}
-                  </p>
-                </Card>
-              </ScrollReveal>
-            ))}
           </div>
         </section>
 
-        <section className="deferred-section pb-8 sm:pb-10">
-          <ScrollReveal>
-            <Card className="space-y-4 rounded-[26px] p-4 sm:space-y-5 sm:rounded-[28px] sm:p-6">
-              <Badge className="px-3 py-1 text-[10px] tracking-[0.28em] sm:text-xs">
-                Документы и поддержка
-              </Badge>
-              <h2 className="text-xl font-bold uppercase tracking-[0.05em] text-white sm:text-2xl sm:tracking-[0.08em]">
-                Все нужные ссылки под рукой
-              </h2>
-              <div className="flex flex-wrap gap-2.5 sm:gap-3">
-                {offerUrl ? (
-                  <Link href={offerUrl} target="_blank" rel="noreferrer">
-                    <Button variant="ghost" size="sm" className="px-4">
-                      Оферта
-                    </Button>
-                  </Link>
-                ) : null}
-                {privacyUrl ? (
-                  <Link href={privacyUrl} target="_blank" rel="noreferrer">
-                    <Button variant="ghost" size="sm" className="px-4">
-                      Политика конфиденциальности
-                    </Button>
-                  </Link>
-                ) : null}
-                {supportTelegramUrl ? (
-                  <Link href={supportTelegramUrl} target="_blank" rel="noreferrer">
-                    <Button variant="ghost" size="sm" className="px-4">
-                      Telegram
-                    </Button>
-                  </Link>
-                ) : null}
-                {env.SUPPORT_EMAIL ? (
-                  <Link href={`mailto:${env.SUPPORT_EMAIL}`}>
-                    <Button variant="ghost" size="sm" className="px-4">
-                      {env.SUPPORT_EMAIL}
-                    </Button>
-                  </Link>
-                ) : null}
-              </div>
-            </Card>
-          </ScrollReveal>
+        <section id="pricing" className="site-section">
+          <div className="obsidian-wrap">
+            <div className="site-section-heading">
+              <h2>Прозрачный тариф</h2>
+              <p>Стоимость зависит от срока использования и лимита устройств.</p>
+            </div>
+            <PublicPricing dailyPriceKopeks={settings.pricePerDayKopeks} trialDays={settings.trialDays}
+              joinHref={joinHref} joinLabel={joinLabel} />
+          </div>
         </section>
-      </div>
-    </main>
+
+        <section id="faq" className="site-section">
+          <div className="obsidian-wrap faq-grid">
+            <div className="site-section-heading">
+              <h2>Частые вопросы</h2>
+              <p>Как начать и управлять подпиской.</p>
+            </div>
+            <div>
+              {questions.map(({ question, answer }) => (
+                <details className="faq-item" key={question}>
+                  <summary>{question}<Plus size={19} aria-hidden="true" /></summary>
+                  <p className="faq-answer">{answer}</p>
+                </details>
+              ))}
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer className="site-footer">
+        <div className="obsidian-wrap site-footer-inner">
+          <Brand />
+          <nav aria-label="Контакты и документы">
+            <a href={offerUrl} target="_blank" rel="noreferrer">Публичная оферта</a>
+            <a href={privacyUrl} target="_blank" rel="noreferrer">Конфиденциальность</a>
+            <a href={supportUrl} target="_blank" rel="noreferrer">Поддержка в Telegram</a>
+            {env.SUPPORT_EMAIL && <a href={"mailto:" + env.SUPPORT_EMAIL}>{env.SUPPORT_EMAIL}</a>}
+          </nav>
+        </div>
+      </footer>
+    </>
   );
 }

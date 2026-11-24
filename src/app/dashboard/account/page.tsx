@@ -1,4 +1,3 @@
-import Link from "next/link";
 import {
   resendOwnEmailVerificationAction,
   sendOwnPasswordChangeCodeAction,
@@ -6,11 +5,15 @@ import {
   updateOwnPasswordAction,
   verifyOwnEmailAction,
 } from "@/app/actions";
+import { ConsoleShell } from "@/components/console-shell";
 import { TelegramBotLink } from "@/components/telegram-bot-link";
 import { LogoutButton } from "@/components/logout-button";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/ui/badge";
+import { ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Notice } from "@/components/ui/feedback";
+import { Input } from "@/components/ui/input";
+import { PageHeader, SectionHeader } from "@/components/ui/page";
 import { PendingButton } from "@/components/ui/pending-button";
 import { PasswordInput } from "@/components/ui/password-input";
 import { requireUser } from "@/lib/auth";
@@ -108,173 +111,86 @@ export default async function DashboardAccountPage({
   const hasRealEmail = !user.isEmailPlaceholder;
   const emailLabel = hasRealEmail ? user.email : "Email не привязан";
 
+
   return (
-    <main className="dashboard-shell min-h-screen px-4 py-4 sm:px-6 sm:py-6">
-      <div className="mx-auto max-w-5xl space-y-6">
-        <header className="flex flex-col gap-4 rounded-[28px] border border-white/10 bg-white/5 p-5 backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <Badge>Account settings</Badge>
-            <h1 className="mt-4 text-3xl font-bold uppercase tracking-[0.08em] text-white">{publicId}</h1>
-            <p className="mt-2 text-sm text-zinc-400">{emailLabel}</p>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <Link href="/">
-              <Button variant="ghost">Главная</Button>
-            </Link>
-            <Link href="/dashboard">
-              <Button variant="ghost">Назад</Button>
-            </Link>
-          </div>
-        </header>
+    <ConsoleShell area="account" isAdmin={session.user.role === "ADMIN"}>
+      <PageHeader title="Настройки аккаунта" description={<><span>ID {publicId}</span> · {emailLabel}</>}>
+        <LogoutButton />
+      </PageHeader>
 
-        {[statusMessage, passwordStatusMessage].filter(Boolean).map((message) => (
-          <Card
-            key={message!.text}
-            className={
-              message!.tone === "success"
-                ? "border-emerald-400/20 bg-emerald-500/10"
-                : "border-red-400/20 bg-red-500/10"
-            }
-          >
-            <p className="text-sm text-white">{message!.text}</p>
-          </Card>
-        ))}
+      {[statusMessage, passwordStatusMessage].map((message) => message ? (
+        <aside key={message.text}><Notice tone={message.tone === "error" ? "danger" : "success"}>{message.text}</Notice></aside>
+      ) : null)}
 
-        <section className="grid gap-4 lg:grid-cols-2">
-          <Card className="space-y-5">
-            <Badge>Email</Badge>
-            <div>
-              <h2 className="text-2xl font-bold uppercase tracking-[0.08em] text-white">
-                Почта и подтверждение
-              </h2>
-              <p className="mt-2 text-sm leading-7 text-zinc-400">
-                Подтвержденный email нужен для уведомлений и восстановления пароля.
+      <section className="console-grid" aria-label="Почта и пароль">
+        <Card id="email" className="console-section space-y-4">
+          <SectionHeader title="Email" description="Подтверждённый адрес нужен для восстановления пароля." />
+          <StatusBadge tone={user.emailVerified && !user.pendingEmail ? "success" : "warning"}>
+            {user.emailVerified && !user.pendingEmail ? "Подтверждён" : "Требуется подтверждение"}
+          </StatusBadge>
+          <form action={updateOwnEmailAction} className="grid gap-3">
+            <label className="grid gap-2 text-sm text-muted">
+              {hasRealEmail ? "Изменить email" : "Добавить email"}
+              <Input defaultValue={user.pendingEmail ?? (hasRealEmail ? user.email : "")}
+                name="email" placeholder="you@domain.com" type="email" autoComplete="email" required />
+            </label>
+            <div><PendingButton>{hasRealEmail ? "Отправить код на новый email" : "Отправить код"}</PendingButton></div>
+          </form>
+          {user.pendingEmail || (hasRealEmail && !user.emailVerified) ? (
+            <div className="grid gap-3 border-t border-line pt-4">
+              <p className="break-words text-sm text-muted">
+                {user.pendingEmail ? "Ожидает подтверждения " + user.pendingEmail : "Текущий email ещё не подтверждён."}
               </p>
+              <form action={verifyOwnEmailAction} className="flex flex-wrap items-end gap-2">
+                <label className="grid min-w-0 flex-1 basis-28 gap-2 text-sm text-muted">
+                  Код из письма
+                  <Input name="code" placeholder="123456" inputMode="numeric" autoComplete="one-time-code" required />
+                </label>
+                <PendingButton>Подтвердить</PendingButton>
+              </form>
+              <form action={resendOwnEmailVerificationAction}>
+                <PendingButton variant="ghost">Отправить код повторно</PendingButton>
+              </form>
             </div>
+          ) : null}
+        </Card>
 
-            <form action={updateOwnEmailAction} className="space-y-4">
-              <label className="grid gap-2 text-sm text-zinc-300">
-                {hasRealEmail ? "Изменить email" : "Добавить email"}
-                <input
-                  className="h-12 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-                  defaultValue={user.pendingEmail ?? (hasRealEmail ? user.email : "")}
-                  name="email"
-                  placeholder="you@domain.com"
-                  type="email"
-                />
-              </label>
-              <PendingButton>
-                {hasRealEmail ? "Отправить код на новый email" : "Отправить код"}
-              </PendingButton>
-            </form>
+        <Card id="password" className="console-section space-y-4">
+          <SectionHeader title="Пароль" description="Код для смены пароля приходит на подтверждённую почту и действует 10 минут." />
+          <form action={sendOwnPasswordChangeCodeAction}>
+            <PendingButton variant="ghost">Отправить код для смены пароля</PendingButton>
+          </form>
+          <form action={updateOwnPasswordAction} className="grid gap-3">
+            <label className="grid gap-2 text-sm text-muted">
+              Код из письма
+              <Input inputMode="numeric" name="code" placeholder="123456" autoComplete="one-time-code" required />
+            </label>
+            <label className="grid gap-2 text-sm text-muted">
+              Новый пароль
+              <PasswordInput name="newPassword" autoComplete="new-password" minLength={8} required />
+            </label>
+            <div><PendingButton>Сохранить пароль</PendingButton></div>
+          </form>
+        </Card>
+      </section>
 
-            {user.pendingEmail || (hasRealEmail && !user.emailVerified) ? (
-              <div className="space-y-4 rounded-3xl border border-cyan-300/15 bg-cyan-400/8 p-4">
-                <p className="text-sm text-zinc-200">
-                  {user.pendingEmail
-                    ? `Ожидает подтверждения: ${user.pendingEmail}`
-                    : "Текущий email еще не подтвержден."}
-                </p>
-                <form action={verifyOwnEmailAction} className="flex flex-col gap-3 sm:flex-row">
-                  <input
-                    className="h-12 flex-1 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-                    name="code"
-                    placeholder="Код из письма"
-                    type="text"
-                  />
-                  <PendingButton>Подтвердить</PendingButton>
-                </form>
-                <form action={resendOwnEmailVerificationAction}>
-                  <PendingButton variant="ghost">Отправить код повторно</PendingButton>
-                </form>
-              </div>
-            ) : (
-              <p className="text-sm text-emerald-300">Email подтвержден.</p>
-            )}
-          </Card>
-
-          <Card className="space-y-5">
-            <Badge>Password</Badge>
-            <h2 className="text-2xl font-bold uppercase tracking-[0.08em] text-white">Пароль</h2>
-            <p className="text-sm leading-7 text-zinc-400">
-              Пароль меняется через одноразовый код. Код приходит на подтверждённую почту и
-              действует 10 минут.
-            </p>
-            <form action={sendOwnPasswordChangeCodeAction}>
-              <PendingButton variant="ghost">Отправить код для смены пароля</PendingButton>
-            </form>
-            <form action={updateOwnPasswordAction} className="space-y-4">
-              <label className="grid gap-2 text-sm text-zinc-300">
-                Код из письма
-                <input
-                  className="h-12 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-                  inputMode="numeric"
-                  name="code"
-                  placeholder="123456"
-                  type="text"
-                />
-              </label>
-              <label className="grid gap-2 text-sm text-zinc-300">
-                Новый пароль
-                <PasswordInput name="newPassword" />
-              </label>
-              <PendingButton>Сохранить пароль</PendingButton>
-            </form>
-          </Card>
-        </section>
-
-        <section className="grid gap-4 lg:grid-cols-2">
-          <Card className="space-y-5">
-            <Badge>Telegram</Badge>
-            <h2 className="text-2xl font-bold uppercase tracking-[0.08em] text-white">
-              Привязка Telegram
-            </h2>
-            <p className="text-sm leading-7 text-zinc-400">
-              Откройте бота из кабинета и нажмите Start, чтобы привязать Telegram к текущему аккаунту.
-            </p>
-            <p className="text-sm text-zinc-300">
-              Текущее состояние:{" "}
-              <span className="font-semibold text-white">
-                {user.telegramBotConfirmedAt
-                  ? `@${user.telegramUsername ?? user.telegramId}`
-                  : user.telegramId
-                    ? "Вход выполнен, требуется подтверждение в боте"
-                    : "Telegram не привязан"}
-              </span>
-            </p>
-            {user.telegramBotConfirmedAt ? (
-              <div className="rounded-3xl border border-emerald-400/20 bg-emerald-500/10 p-4">
-                <p className="text-sm text-emerald-200">
-                  Telegram уже привязан. Уведомления о балансе и подписке будут приходить в этот
-                  аккаунт после старта бота.
-                </p>
-              </div>
-            ) : (
-              <TelegramBotLink />
-            )}
-          </Card>
-
-          <Card>
-            <Badge>Support</Badge>
-            <div className="mt-4 flex flex-wrap gap-3">
-              {supportTelegramUrl ? (
-                <Link href={supportTelegramUrl} target="_blank" rel="noreferrer">
-                  <Button>Поддержка в Telegram</Button>
-                </Link>
-              ) : null}
-              {env.SUPPORT_EMAIL ? (
-                <Link href={`mailto:${env.SUPPORT_EMAIL}`}>
-                  <Button variant="ghost">{env.SUPPORT_EMAIL}</Button>
-                </Link>
-              ) : null}
-            </div>
-          </Card>
-        </section>
-
-        <div className="flex justify-end">
-          <LogoutButton />
-        </div>
-      </div>
-    </main>
+      <section className="console-grid" aria-label="Telegram и поддержка">
+        <Card id="telegram" className="console-section space-y-4">
+          <SectionHeader title="Telegram" description="Привяжите бота, чтобы получать уведомления о балансе и подписке." />
+          <StatusBadge tone={user.telegramBotConfirmedAt ? "success" : "neutral"}>
+            {user.telegramBotConfirmedAt ? "@" + (user.telegramUsername ?? user.telegramId)
+              : user.telegramId ? "Требуется подтверждение в боте" : "Telegram не привязан"}
+          </StatusBadge>
+          {user.telegramBotConfirmedAt ? <Notice tone="success">Telegram привязан к текущему аккаунту.</Notice> : <TelegramBotLink />}
+        </Card>
+        <Card>
+          <SectionHeader title="Поддержка" />
+          <div className="flex flex-wrap gap-2">
+            {supportTelegramUrl ? <ButtonLink href={supportTelegramUrl} variant="ghost" target="_blank" rel="noreferrer">Поддержка в Telegram</ButtonLink> : null}
+            {env.SUPPORT_EMAIL ? <ButtonLink href={"mailto:" + env.SUPPORT_EMAIL} variant="ghost">{env.SUPPORT_EMAIL}</ButtonLink> : null}
+          </div>
+        </Card>
+      </section>
+    </ConsoleShell>
   );
 }

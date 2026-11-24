@@ -1,163 +1,72 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import { useState } from "react";
+import { CreditCard, Landmark, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Modal } from "@/components/ui/dialog";
+import { EmptyState, Notice } from "@/components/ui/feedback";
+import { Input } from "@/components/ui/input";
 import { PendingButton } from "@/components/ui/pending-button";
 
 type BillingModalProps = {
-  transactions: Array<{
-    id: string;
-    description: string;
-    amount: string;
-    createdAt: string;
-  }>;
+  transactions: Array<{ id: string; description: string; amount: string; createdAt: string }>;
   paymentsEnabled: boolean;
   topUpAction: (formData: FormData) => Promise<void>;
 };
 
 export function BillingModal({ transactions, paymentsEnabled, topUpAction }: BillingModalProps) {
   const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [open]);
-
-  const overlay =
-    typeof document !== "undefined" && open
-      ? createPortal(
-          <div className="fixed inset-0 z-[999] flex items-center justify-center p-3 sm:p-5">
-            <button
-              type="button"
-              aria-label="Закрыть окно пополнения"
-              className="absolute inset-0 bg-black/72 backdrop-blur-md"
-              onClick={() => setOpen(false)}
-            />
-
-            <div className="relative z-10 flex max-h-[min(88dvh,920px)] w-full max-w-5xl flex-col overflow-hidden rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(16,20,29,0.98),rgba(8,11,17,0.98))] shadow-[0_28px_120px_rgba(0,0,0,0.6)] backdrop-blur-xl">
-              <div className="flex items-start justify-between gap-4 border-b border-white/10 px-4 py-4 sm:px-6 sm:py-5">
-                <div className="min-w-0">
-                  <p className="text-[11px] uppercase tracking-[0.28em] text-zinc-500">Billing</p>
-                  <h3 className="mt-2 text-xl font-bold uppercase tracking-[0.08em] text-white sm:text-3xl">
-                    Баланс и пополнения
-                  </h3>
-                  <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-                    Пополнение и история платежей открываются в отдельном всплывающем окне.
-                  </p>
-                </div>
-                <Button
-                  variant="ghost"
-                  onClick={() => setOpen(false)}
-                  type="button"
-                  className="shrink-0"
-                >
-                  Назад
-                </Button>
-              </div>
-
-              <div className="grid flex-1 gap-4 overflow-y-auto px-4 py-4 sm:px-6 sm:py-6 lg:grid-cols-[0.92fr_1.08fr] lg:gap-6">
-                <div className="rounded-[26px] border border-white/10 bg-white/[0.04] p-4 sm:p-5">
-                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-400">
-                    Пополнение
-                  </p>
-
-                  <form action={topUpAction} className="mt-4 space-y-3">
-                    <label className="block text-sm text-zinc-300">
-                      Сумма пополнения
-                      <input
-                        className="mt-2 h-12 w-full rounded-2xl border border-white/10 bg-black/30 px-4 text-white outline-none transition focus:border-cyan-300/40"
-                        defaultValue="199"
-                        min="10"
-                        name="amount"
-                        step="1"
-                        type="number"
-                      />
-                    </label>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm text-zinc-200 transition hover:border-cyan-300/30">
-                        <input
-                          defaultChecked
-                          name="method"
-                          type="radio"
-                          value="bank_card"
-                          className="accent-cyan-300"
-                        />
-                        Картой
-                      </label>
-                      <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-sm text-zinc-200 transition hover:border-cyan-300/30">
-                        <input
-                          name="method"
-                          type="radio"
-                          value="sbp"
-                          className="accent-cyan-300"
-                        />
-                        СБП
-                      </label>
-                    </div>
-                    {paymentsEnabled ? (
-                      <PendingButton className="w-full">Перейти к оплате</PendingButton>
-                    ) : (
-                      <p className="rounded-2xl border border-dashed border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-400">
-                        Онлайн-оплата скоро будет доступна. Если нужно пополнить баланс сейчас,
-                        напишите в поддержку.
-                      </p>
-                    )}
-                  </form>
-                </div>
-
-                <div className="rounded-[26px] border border-white/10 bg-white/[0.04] p-4 sm:p-5">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-400">
-                      История пополнений
-                    </p>
-                    <span className="text-xs text-zinc-500">{transactions.length} записей</span>
-                  </div>
-
-                  <div className="mt-4 max-h-[44dvh] space-y-3 overflow-y-auto pr-1 sm:max-h-[52dvh]">
-                    {transactions.length ? (
-                      transactions.map((transaction) => (
-                        <div
-                          key={transaction.id}
-                          className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/25 px-4 py-3"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-white">
-                              {transaction.description}
-                            </p>
-                            <p className="mt-1 text-xs text-zinc-500">{transaction.createdAt}</p>
-                          </div>
-                          <p className="shrink-0 text-sm font-semibold text-cyan-200">
-                            +{transaction.amount}
-                          </p>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 px-4 py-4 text-sm text-zinc-400">
-                        Пополнений пока не было.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>,
-          document.body,
-        )
-      : null;
-
   return (
     <>
-      <Button onClick={() => setOpen(true)} size="lg">
-        Пополнить баланс
+      <Button type="button" onClick={() => setOpen(true)} size="lg">
+        <Plus size={19} aria-hidden="true" /> Пополнить баланс
       </Button>
-      {overlay}
+      <Modal open={open} onClose={() => setOpen(false)} title="Баланс и пополнения"
+        description="Выберите сумму и способ оплаты. Здесь же доступна история пополнений." layout="wide">
+        <div className="grid gap-4 md:grid-cols-[.9fr_1.1fr]">
+          <section className="ui-card bg-background" aria-label="Пополнение баланса">
+            <h3 className="text-lg font-semibold tracking-tight">Пополнение</h3>
+            <form action={topUpAction} className="mt-4 grid gap-4">
+              <label className="grid gap-2 text-sm text-muted">
+                Сумма в рублях
+                <Input defaultValue="199" min="10" name="amount" step="1" type="number" inputMode="numeric" required />
+              </label>
+              <fieldset className="grid grid-cols-2 gap-2">
+                <legend className="mb-2 text-sm text-muted">Способ оплаты</legend>
+                <label className="payment-option">
+                  <input defaultChecked name="method" type="radio" value="bank_card" />
+                  <CreditCard size={17} aria-hidden="true" /> Картой
+                </label>
+                <label className="payment-option">
+                  <input name="method" type="radio" value="sbp" />
+                  <Landmark size={17} aria-hidden="true" /> СБП
+                </label>
+              </fieldset>
+              {paymentsEnabled ? (
+                <PendingButton className="w-full">Перейти к оплате</PendingButton>
+              ) : (
+                <Notice>Онлайн-оплата пока недоступна. Чтобы пополнить баланс, напишите в поддержку.</Notice>
+              )}
+            </form>
+          </section>
+          <section className="ui-card bg-background min-w-0" aria-label="История пополнений">
+            <h3 className="text-lg font-semibold tracking-tight">История пополнений</h3>
+            {transactions.length ? (
+              <ul className="mt-3 max-h-[45dvh] overflow-y-auto">
+                {transactions.map((transaction) => (
+                  <li key={transaction.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-line py-3 last:border-0">
+                    <div className="min-w-0 max-w-full">
+                      <p className="break-words font-medium">{transaction.description}</p>
+                      <p className="mt-1 text-sm text-subtle">{transaction.createdAt}</p>
+                    </div>
+                    <p className="text-sm font-semibold tabular-nums text-emerald-300">+{transaction.amount}</p>
+                  </li>
+                ))}
+              </ul>
+            ) : <div className="mt-3"><EmptyState>Пополнений пока не было.</EmptyState></div>}
+          </section>
+        </div>
+      </Modal>
     </>
   );
 }

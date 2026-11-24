@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
+import { Notice } from "@/components/ui/feedback";
 import { publicEnv } from "@/lib/public-env";
 
 declare global {
@@ -87,18 +88,14 @@ export function TelegramLogin({ mode = "login", onLinked }: TelegramLoginProps) 
   }, [mode, onLinked, router]);
 
   if (!publicEnv.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME) {
-    return (
-      <p className="text-sm text-zinc-400">
-        Telegram будет доступен после заполнения `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME`.
-      </p>
-    );
+    return <Notice>Вход через Telegram сейчас недоступен.</Notice>;
   }
 
   return (
     <div className="space-y-3">
       <div ref={containerRef} className="min-h-12" />
-      {success ? <p className="text-sm text-emerald-300">{success}</p> : null}
-      {error ? <p className="text-sm text-red-300">{error}</p> : null}
+      {success ? <Notice tone="success">{success}</Notice> : null}
+      {error ? <Notice tone="danger">{error}</Notice> : null}
     </div>
   );
 }

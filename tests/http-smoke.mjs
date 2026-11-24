@@ -25,6 +25,9 @@ const prisma = new PrismaClient({ datasourceUrl: databaseUrl });
 const password = "local-fixture-password";
 const ownUrl = "https://vpn.example.test/sub/owned-smoke-link";
 const otherUrl = "https://vpn.example.test/sub/other-smoke-link";
+const browserEmail = "browser@example.test";
+const browserAdmin = "browser-admin@example.test";
+const browserSubscription = "https://vpn.example.test/sub/browser-fixture";
 const requireLocal = createRequire(import.meta.url);
 let child;
 let output = "";
@@ -57,7 +60,17 @@ try {
       billingStartedAt: new Date(), lastBillingAt: new Date(), subscriptionUrl: ownUrl },
     { id: "http-other", email: "other@example.test", passwordHash, subscriptionUrl: otherUrl },
     { id: "http-admin", email: "admin@example.test", passwordHash, role: "ADMIN" },
+    { id: "browser-user", email: browserEmail, passwordHash, balanceKopeks: 90000, hwidDeviceLimit: 1,
+      billingStartedAt: new Date(), lastBillingAt: new Date(), subscriptionUrl: browserSubscription, vpnProvisionState: "ACTIVE" },
+    { id: "browser-admin", email: browserAdmin, passwordHash, role: "ADMIN" },
   ] });
+  await prisma.balanceTransaction.create({ data: {
+    userId: "browser-user", type: "TOPUP", amountKopeks: 90000, description: "Тестовое пополнение",
+  } });
+  await prisma.payment.create({ data: {
+    id: "smoke-payment", userId: "browser-user", amountKopeks: 90000, method: "sbp",
+    description: "Тестовый заказ", status: "SUCCEEDED",
+  } });
 
   child = spawn(process.execPath, [requireLocal.resolve("next/dist/bin/next"), "start", "-H", "127.0.0.1", "-p", String(port)], {
     env: {
@@ -107,9 +120,28 @@ try {
   });
   assert.equal(registered.status, 200, await registered.text());
   assert.equal((await request("/dashboard", { headers: { cookie: await login("new@example.test") } })).status, 200);
-  console.log("PASS HTTP: registration, login, private subscription, ban, admin role, deleted admin session and cron.");
+  const reset = await request("/api/auth/password-reset/request", {
+    method: "POST", body: JSON.stringify({ email: "unknown@example.test" }),
+  });
+  assert.equal(reset.status, 200);
+  assert.deepEqual(await reset.json(), { ok: true });
+  console.log("PASS HTTP: registration, login, private subscription, ban, admin role, deleted admin session, reset request and cron.");
   if (process.env.SITE1VPN_BROWSER_EXE) {
-    await runBrowserSmoke(process.env.SITE1VPN_BROWSER_EXE, origin, root, "new@example.test", password);
+    await runBrowserSmoke(process.env.SITE1VPN_BROWSER_EXE, origin, root, {
+      email: browserEmail, admin: browserAdmin, subscription: browserSubscription, password,
+      screenshotDir: process.env.SITE1VPN_SCREENSHOT_DIR,
+    });
+    const user = await prisma.user.findUniqueOrThrow({ where: { email: browserEmail } });
+    assert.equal(user.hwidDeviceLimit, 2);
+    assert.equal(user.isBanned, false, "Cancelling the confirmation preserves account access");
+    const gift = await prisma.balanceTransaction.findFirst({
+      where: { userId: user.id, description: "Obsidian QA gift", type: "ADMIN_ADJUSTMENT" },
+    });
+    assert.equal(gift?.amountKopeks, 10600, "Gift days use the saved tariff and device limit");
+    const settings = await prisma.systemSettings.findUniqueOrThrow({ where: { id: "default" } });
+    assert.equal(settings.maintenanceEnabled, true);
+    assert.match(await (await request("/")).text(), /Obsidian QA maintenance/);
+    assert.equal((await request("/admin", { headers: { cookie: await login(browserAdmin) } })).status, 200);
   }
 } catch (error) {
   console.error(output);

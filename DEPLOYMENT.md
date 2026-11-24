@@ -31,7 +31,7 @@ Use Ubuntu 24.04 and connect as `root`:
 ```bash
 apt update
 apt upgrade -y
-apt install -y git nginx curl ca-certificates snapd dnsutils ufw
+apt install -y git nginx curl ca-certificates openssl snapd dnsutils sqlite3 ufw
 
 curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh
 bash /tmp/nodesource_setup.sh
@@ -59,7 +59,7 @@ ufw status
 
 ```bash
 useradd --system --create-home --shell /usr/sbin/nologin site1vpn
-git clone https://github.com/yadobr1337/site1vpn.git /var/www/site1vpn
+git clone --branch main https://github.com/yadobr1337/last.git /var/www/site1vpn
 chown -R site1vpn:site1vpn /var/www/site1vpn
 cd /var/www/site1vpn
 ```
@@ -213,9 +213,32 @@ curl -fsS http://127.0.0.1:3000/api/health
 
 ## 7. Configure Nginx Before Moving DNS
 
+The bundled production configuration references TLS files. Use an HTTP server
+block until Certbot has issued the certificate. For a different domain,
+substitute it here, in `NEXTAUTH_URL`, and in the Certbot and DNS commands.
+
+Create `/etc/nginx/sites-available/the1vpn.ru` with the following content:
+
+```nginx
+server {
+    listen 80;
+    listen [::]:80;
+    server_name the1vpn.ru www.the1vpn.ru;
+    client_max_body_size 8m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
 ```bash
-cd /var/www/site1vpn
-cp deploy/nginx-the1vpn.ru.conf /etc/nginx/sites-available/the1vpn.ru
 ln -sf /etc/nginx/sites-available/the1vpn.ru /etc/nginx/sites-enabled/the1vpn.ru
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
@@ -255,7 +278,7 @@ Both commands must show `NEW_VPS_IP`.
 After DNS points to the new server:
 
 ```bash
-certbot --nginx -d the1vpn.ru -d www.the1vpn.ru
+certbot --nginx --redirect -d the1vpn.ru -d www.the1vpn.ru
 certbot renew --dry-run
 
 systemctl enable --now site1vpn-healthcheck.timer
@@ -263,6 +286,15 @@ systemctl status site1vpn nginx site1vpn-healthcheck.timer --no-pager
 
 curl -fsS https://the1vpn.ru/api/health
 curl -I https://the1vpn.ru/
+```
+
+On `the1vpn.ru`, the bundled production configuration adds the canonical host
+redirect, authentication rate limits and payment webhook log filtering. It can
+be installed after the certificate for both names is issued:
+
+```bash
+cp /var/www/site1vpn/deploy/nginx-the1vpn.ru.conf /etc/nginx/sites-available/the1vpn.ru
+nginx -t && systemctl reload nginx
 ```
 
 The health check verifies Next.js and the local HTTPS proxy every minute. It

@@ -2,32 +2,17 @@
 
 import { useActionState } from "react";
 import { refreshRemnawaveStatusAction } from "@/app/actions";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { SectionHeader } from "@/components/ui/page";
+import { PendingButton } from "@/components/ui/pending-button";
 import type { RemnawaveConnectionStatus } from "@/lib/remnawave";
-import { cn } from "@/lib/utils";
 
-const stateDetails = {
-  connected: {
-    label: "Подключено",
-    indicatorClassName: "bg-emerald-300 shadow-[0_0_16px_rgba(110,231,183,0.75)]",
-    badgeClassName: "border-emerald-400/25 bg-emerald-500/10 text-emerald-200",
-  },
-  error: {
-    label: "Ошибка подключения",
-    indicatorClassName: "bg-red-300 shadow-[0_0_16px_rgba(252,165,165,0.75)]",
-    badgeClassName: "border-red-400/25 bg-red-500/10 text-red-200",
-  },
-  not_configured: {
-    label: "Не настроено",
-    indicatorClassName: "bg-amber-300 shadow-[0_0_16px_rgba(252,211,77,0.65)]",
-    badgeClassName: "border-amber-400/25 bg-amber-500/10 text-amber-100",
-  },
-} satisfies Record<
-  RemnawaveConnectionStatus["state"],
-  { label: string; indicatorClassName: string; badgeClassName: string }
->;
+const details = {
+  connected: { label: "Панель доступна", tone: "success" },
+  error: { label: "Ошибка подключения", tone: "danger" },
+  not_configured: { label: "Не настроено", tone: "neutral" },
+} as const;
 
 function formatUptime(seconds: number | null) {
   if (seconds === null) {
@@ -47,70 +32,30 @@ function formatCheckedAt(value: string) {
   }).format(new Date(value));
 }
 
-export function RemnawaveStatusCard({
-  initialStatus,
-}: {
-  initialStatus: RemnawaveConnectionStatus;
-}) {
-  const [status, refreshAction, pending] = useActionState(
-    refreshRemnawaveStatusAction,
-    initialStatus,
-  );
-  const details = stateDetails[status.state];
 
+export function RemnawaveStatusCard({ initialStatus }: { initialStatus: RemnawaveConnectionStatus }) {
+  const [status, refreshAction] = useActionState(refreshRemnawaveStatusAction, initialStatus);
+  const { label, tone } = details[status.state];
+  const metrics = [
+    { label: "Задержка", value: status.latencyMs === null ? "—" : status.latencyMs + " мс" },
+    { label: "Инстансы", value: status.instanceCount ?? "—" },
+    { label: "Время работы", value: formatUptime(status.uptimeSeconds) },
+    { label: "Проверено", value: formatCheckedAt(status.checkedAt) },
+  ];
   return (
-    <Card className="overflow-hidden">
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <Badge>Remnawave API</Badge>
-            <span
-              className={cn(
-                "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium uppercase tracking-[0.16em]",
-                details.badgeClassName,
-              )}
-            >
-              <span className={cn("h-2 w-2 rounded-full", details.indicatorClassName)} />
-              {details.label}
-            </span>
-          </div>
-          <div>
-            <p className="text-lg font-semibold text-white">{status.message}</p>
-            <p className="mt-1 break-all text-sm text-zinc-500">
-              {status.baseUrl ?? "URL панели не указан"}
-            </p>
-          </div>
-        </div>
-
-        <form action={refreshAction}>
-          <Button type="submit" variant="ghost" disabled={pending}>
-            {pending ? "Проверяем..." : "Обновить статус"}
-          </Button>
-        </form>
+    <Card className="space-y-4">
+      <SectionHeader title="Remnawave" description="Состояние подключения к API.">
+        <form action={refreshAction}><PendingButton variant="ghost">Обновить статус</PendingButton></form>
+      </SectionHeader>
+      <div className="flex flex-wrap items-center gap-2" aria-live="polite">
+        <StatusBadge tone={tone}>{label}</StatusBadge>
+        <span className="break-all text-sm text-muted">{status.baseUrl ?? "URL панели не указан"}</span>
       </div>
-
-      <div className="mt-5 grid gap-3 border-t border-white/10 pt-5 sm:grid-cols-2 lg:grid-cols-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Задержка</p>
-          <p className="mt-1 text-sm font-medium text-zinc-200">
-            {status.latencyMs === null ? "—" : `${status.latencyMs} мс`}
-          </p>
-        </div>
-        <div>
-          <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Инстансы</p>
-          <p className="mt-1 text-sm font-medium text-zinc-200">{status.instanceCount ?? "—"}</p>
-        </div>
-        <div>
-          <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Uptime</p>
-          <p className="mt-1 text-sm font-medium text-zinc-200">
-            {formatUptime(status.uptimeSeconds)}
-          </p>
-        </div>
-        <div>
-          <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Проверено</p>
-          <p className="mt-1 text-sm font-medium text-zinc-200">{formatCheckedAt(status.checkedAt)}</p>
-        </div>
-      </div>
+      <p className="break-words text-sm text-muted">{status.message}</p>
+      <dl className="grid grid-cols-2 gap-3 border-t border-line pt-4 lg:grid-cols-4">
+        {metrics.map((metric) => <div key={metric.label}><dt className="text-sm text-muted">{metric.label}</dt>
+          <dd className="mt-1 font-semibold tabular-nums">{metric.value}</dd></div>)}
+      </dl>
     </Card>
   );
 }

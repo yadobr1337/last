@@ -1,19 +1,22 @@
-import Link from "next/link";
 import { Role, TransactionType, VpnProvisionState } from "@prisma/client";
-import { Badge } from "@/components/ui/badge";
+import { Activity, CircleDollarSign, Search, ShieldCheck, Users, Wallet } from "lucide-react";
+import { ConsoleShell } from "@/components/console-shell";
+import { StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { CheckField } from "@/components/ui/check-field";
+import { DataTable } from "@/components/ui/data-table";
+import { EmptyState, Notice } from "@/components/ui/feedback";
+import { Input } from "@/components/ui/input";
+import { PageHeader, SectionHeader, StatCard } from "@/components/ui/page";
 import { PendingButton } from "@/components/ui/pending-button";
+import { Tabs } from "@/components/ui/tabs";
 import { RemnawaveStatusCard } from "@/components/admin/remnawave-status-card";
 import { AdminOperations } from "@/components/admin/admin-operations";
 import { SiteRestartCard } from "@/components/admin/site-restart-card";
 import { SquadManager } from "@/components/admin/squad-manager";
-import { UserManagerModal } from "@/components/admin/user-manager-modal";
-import {
-  runProvisioningNowAction,
-  runSyncNowAction,
-  updateSettingsAction,
-} from "@/app/actions";
+import { UserManagerModal, type AdminUserManagerData } from "@/components/admin/user-manager-modal";
+import { runProvisioningNowAction, runSyncNowAction, updateSettingsAction } from "@/app/actions";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
@@ -126,6 +129,8 @@ export default async function AdminPage({
     queuedNotifications,
     failedNotifications,
     auditEvents,
+    activeSubscriptions,
+    payments,
   ] = await Promise.all([
     getSettings(),
     db.user.aggregate({
@@ -179,362 +184,223 @@ export default async function AdminPage({
       take: 8,
       select: { id: true, action: true, actor: true, target: true, createdAt: true },
     }),
+    db.user.count({ where: { role: Role.USER, isBanned: false, balanceKopeks: { gt: 0 }, vpnProvisionState: "ACTIVE" } }),
+    db.payment.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 16,
+      select: { id: true, status: true, amountKopeks: true, method: true, createdAt: true },
+    }),
   ]);
 
-  const totalBalance = userStats._sum.balanceKopeks ?? 0;
-  const activeUsers = userStats._count.id;
+  let user: AdminUserManagerData | null = null;
+  if (searchedUser) {
+    const deviceCount = Math.max(1, searchedUser.hwidDeviceLimit ?? settings.defaultHwidDeviceLimit);
+    const remainingDays = settings.pricePerDayKopeks > 0
+      ? searchedUser.balanceKopeks / (settings.pricePerDayKopeks * deviceCount) : 0;
+    user = {
+      id: searchedUser.id,
+      publicId: searchedUser.publicId ?? "ожидается",
+      email: searchedUser.email,
+      squadName: searchedUser.squad?.name ?? "не назначен",
+      remnawaveUserUuid: searchedUser.remnawaveUserUuid ?? "ещё не создан",
+      subscriptionUrl: searchedUser.subscriptionUrl ?? "Ссылка подписки ещё не сгенерирована",
+      balance: formatCurrency(searchedUser.balanceKopeks),
+      remainingDays: formatDays(remainingDays),
+      deviceCount,
+      hwidDeviceLimit: searchedUser.hwidDeviceLimit,
+      defaultHwidDeviceLimit: settings.defaultHwidDeviceLimit,
+      vpnStatus: getVpnStatusLabel(searchedUser),
+      vpnProvisionState: searchedUser.vpnProvisionState,
+      vpnStatusMessage: searchedUser.vpnStatusMessage ?? "Синхронизация ещё не запускалась.",
+      isBanned: searchedUser.isBanned,
+      transactions: searchedUser.transactions.map((transaction) => ({
+        id: transaction.id,
+        label: getTransactionLabel(transaction.type),
+        description: transaction.description,
+        amount: formatCurrency(transaction.amountKopeks),
+        positive: transaction.amountKopeks >= 0,
+        createdAt: transaction.createdAt.toLocaleString("ru-RU"),
+      })),
+    };
+  }
 
   return (
-    <main className="dashboard-shell min-h-screen px-6 py-6">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <header className="flex flex-col gap-4 rounded-[28px] border border-white/10 bg-white/5 p-5 backdrop-blur-xl lg:flex-row lg:items-center lg:justify-between">
-          <div className="space-y-4">
-            <Badge>Admin console</Badge>
-            <div>
-              <h1 className="text-3xl font-bold uppercase tracking-[0.08em] text-white">
-                Управление 1VPN
-              </h1>
-              <p className="mt-2 text-sm text-zinc-400">
-                Поиск пользователя по ID и точечное управление его балансом, баном и устройствами.
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <Link href="/dashboard" className="inline-flex">
-              <Button variant="ghost">Вернуться в кабинет</Button>
-            </Link>
-            <form action={runSyncNowAction}>
-              <PendingButton>Запустить синхронизацию</PendingButton>
-            </form>
-          </div>
-        </header>
+    <ConsoleShell area="admin" isAdmin>
+      <PageHeader title="Управление 1VPN" description="Пользователи, подписки и инфраструктура сервиса.">
+        <form action={runSyncNowAction}>
+          <PendingButton variant="ghost"><Activity size={17} aria-hidden="true" />Запустить синхронизацию</PendingButton>
+        </form>
+      </PageHeader>
 
+      <section id="overview" className="console-section space-y-3">
+        <div className="console-stats admin-stats">
+          <StatCard label="Пользователи" value={userStats._count.id} icon={<Users size={19} aria-hidden="true" />} />
+          <StatCard label="Активные подписки" value={activeSubscriptions} icon={<ShieldCheck size={19} aria-hidden="true" />} />
+          <StatCard label="Суммарный баланс" value={formatCurrency(userStats._sum.balanceKopeks ?? 0)}
+            icon={<Wallet size={19} aria-hidden="true" />} />
+          <StatCard label="Цена за день" value={formatCurrency(settings.pricePerDayKopeks)}
+            icon={<CircleDollarSign size={19} aria-hidden="true" />} />
+        </div>
+        <Card>
+          <SectionHeader title="Регистрации и покупатели" />
+          <DataTable label="Регистрации по периодам" empty="Нет данных" columns={["Период", "Новые пользователи", "Покупатели"]}
+            rows={[{ label: "Сегодня", stats: todayStats }, { label: "За 7 дней", stats: weekStats },
+              { label: "За 30 дней", stats: monthStats }].map(({ label, stats }) => ({
+                id: label, cells: [label, stats.newUsers, stats.buyers],
+              }))} />
+        </Card>
+      </section>
+
+      <section id="users" className="console-section">
+        <Card className="space-y-4">
+          <SectionHeader title="Пользователи" description="Найдите аккаунт по email, публичному или внутреннему ID." />
+          <form className="flex flex-wrap items-end gap-2" method="get" action="/admin#users">
+            <label className="grid min-w-0 flex-1 basis-48 gap-2 text-sm text-muted">
+              Email или ID
+              <Input defaultValue={normalizedQuery ?? ""} name="user" placeholder="Например, 12345678" type="search" />
+            </label>
+            <Button type="submit"><Search size={17} aria-hidden="true" />Найти пользователя</Button>
+          </form>
+          {user ? <UserManagerModal key={user.id} user={user} /> : normalizedQuery ? <EmptyState>Пользователь не найден.</EmptyState> : null}
+        </Card>
+      </section>
+
+      <section id="finance" className="console-section space-y-3">
+        <Card>
+          <SectionHeader title="Платежи" description="Последние заказы пополнения." />
+          <DataTable label="Платежи" columns={["Заказ", "Способ", "Сумма", "Статус", "Создан"]}
+            empty="Платежей пока нет." filterLabel="Статус"
+            rows={payments.map((payment) => ({
+              id: payment.id,
+              group: payment.status,
+              cells: [
+                <code key="id" className="text-xs text-muted">{payment.id}</code>,
+                payment.method === "sbp" ? "СБП" : payment.method === "bank_card" ? "Карта" : payment.method,
+                formatCurrency(payment.amountKopeks),
+                <StatusBadge key="status" tone={payment.status === "SUCCEEDED" ? "success" : payment.status === "CANCELED" ? "danger" : "neutral"}>{payment.status}</StatusBadge>,
+                payment.createdAt.toLocaleString("ru-RU", { timeZone: "Europe/Moscow" }),
+              ],
+            }))} />
+        </Card>
+        <Card>
+          <SectionHeader title="Настройки" description="Тариф, пробный период и параметры сайта.">
+            <a className="text-sm text-accent underline underline-offset-4" href="#gift-days">Подарочные дни</a>
+          </SectionHeader>
+          <form action={updateSettingsAction} className="grid gap-4">
+            <Tabs label="Настройки сайта" items={[
+              { title: "Тариф и подписка", content: (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="grid gap-2 text-sm text-muted">Цена за день, ₽
+                    <Input defaultValue={settings.pricePerDayKopeks / 100} name="pricePerDay" step="0.01" type="number" required />
+                  </label>
+                  <label className="grid gap-2 text-sm text-muted">Пробный период, дней
+                    <Input defaultValue={settings.trialDays} name="trialDays" type="number" required />
+                  </label>
+                  <label className="grid gap-2 text-sm text-muted">Устройства по умолчанию
+                    <Input defaultValue={settings.defaultHwidDeviceLimit} name="defaultHwidDeviceLimit" type="number" required />
+                  </label>
+                  <label className="grid gap-2 text-sm text-muted">Окно сохранения ссылки, ч
+                    <Input defaultValue={settings.deletionGraceHours} name="deletionGraceHours" readOnly type="number" />
+                  </label>
+                </div>
+              ) },
+              { title: "Сайт и защита", content: (
+                <div className="grid gap-3">
+                  <label className="grid gap-2 text-sm text-muted">Ссылка на поддержку Telegram
+                    <Input defaultValue={settings.supportTelegramUrl ?? ""} name="supportTelegramUrl" type="url" />
+                  </label>
+                  <label className="grid gap-2 text-sm text-muted">Анонс главной
+                    <Input defaultValue={settings.heroAnnouncement ?? ""} name="heroAnnouncement" type="text" />
+                  </label>
+                  <CheckField variant="switch" name="captchaEnabled" defaultChecked={settings.captchaEnabled}>Включить hCaptcha</CheckField>
+                </div>
+              ) },
+            ]} />
+            <div><PendingButton>Сохранить настройки</PendingButton></div>
+          </form>
+        </Card>
+      </section>
+
+      <section id="vpn" className="console-section space-y-3">
         <RemnawaveStatusCard initialStatus={remnawaveStatus} />
+        <Card>
+          <SectionHeader title="Сквады" description="Добавьте UUID из Remnawave и задайте вместимость сквада." />
+          <SquadManager squads={squads.map((squad) => ({
+            id: squad.id, name: squad.name, memberLimit: squad.memberLimit, isActive: squad.isActive,
+            remnawaveInternalSquadUuid: squad.remnawaveInternalSquadUuid, userCount: squad._count.users,
+          }))} />
+        </Card>
+      </section>
+
+      <section id="nodes" className="console-section">
+        <Card className="space-y-4">
+          <SectionHeader title="Серверы и ноды" description="Закупка VPS в Aeza, DNS в Timeweb и настройка в Remnawave." />
+          <div className="flex flex-wrap gap-2">
+            <StatusBadge tone={provisioning.config.enabled ? "success" : "neutral"}>{provisioning.config.enabled ? "Включено" : "Выключено"}</StatusBadge>
+            <StatusBadge tone={provisioning.config.dryRun ? "neutral" : "warning"}>{provisioning.config.dryRun ? "Dry run" : "Платный режим"}</StatusBadge>
+            <span className="ui-badge">Локации {provisioning.config.targets.length}</span>
+            <span className="ui-badge">Нод на сквад {provisioning.config.nodesPerSquad}</span>
+            <span className="ui-badge">Лимит сквадов {Math.floor(provisioning.config.maxServers / provisioning.config.nodesPerSquad)}</span>
+            <span className="ui-badge">Лимит серверов {provisioning.config.maxServers}</span>
+          </div>
+          {provisioning.missing.length ? <Notice tone="warning">Заполните параметры закупки {provisioning.missing.join(", ")}</Notice> : null}
+          <form action={runProvisioningNowAction} className="grid justify-items-start gap-3">
+            {provisioning.config.enabled && !provisioning.config.dryRun ? (
+              <CheckField name="confirmPaidProvisioning" required>Подтверждаю возможную покупку VPS</CheckField>
+            ) : null}
+            <PendingButton>Запустить автоподготовку</PendingButton>
+          </form>
+          <DataTable label="Задачи серверов" columns={["Нода", "Адрес", "Статус", "Подробности"]}
+            filterLabel="Статус нод" pageSize={6} empty="Задачи появятся после запуска автоподготовки."
+            rows={provisioning.jobs.map((job) => ({
+              id: job.id,
+              group: job.status,
+              cells: [
+                <div key="name"><strong>{job.nodeName}</strong><p className="text-sm text-muted">{job.locationName}</p></div>,
+                <div key="address">{job.fqdn}{job.serverIp ? <p className="mt-1 font-mono text-xs text-muted">{job.serverIp}</p> : null}</div>,
+                <StatusBadge key="status" tone={job.lastError ? "danger" : job.status === "ACTIVE" ? "success" : "neutral"}>{job.status}</StatusBadge>,
+                <div key="details" className="space-y-1 text-sm">
+                  {job.groupKey ? <p className="text-muted">{job.groupKey} · нода {job.nodeIndex ?? "—"}</p> : null}
+                  {job.lastError ? <p className="text-red-300">{job.lastError}</p> : !job.groupKey ? "—" : null}
+                </div>,
+              ],
+            }))} />
+        </Card>
+      </section>
+
+      <section id="notifications" className="console-section space-y-3">
+        <Card>
+          <SectionHeader title="Уведомления" description="Состояние доставки сообщений Telegram." />
+          <div className="flex flex-wrap gap-2">
+            <StatusBadge>{queuedNotifications} в очереди</StatusBadge>
+            <StatusBadge tone={failedNotifications ? "danger" : "neutral"}>{failedNotifications} ошибок доставки</StatusBadge>
+          </div>
+        </Card>
+        <AdminOperations maintenanceEnabled={settings.maintenanceEnabled} maintenanceMessage={settings.maintenanceMessage} />
+      </section>
+
+      <section id="journal" className="console-section">
+        <Card>
+          <SectionHeader title="Журнал операций" description="Последние административные действия." />
+          <DataTable label="Журнал операций" columns={["Дата", "Действие", "Исполнитель", "Объект"]}
+            empty="Записей журнала пока нет." pageSize={6} rows={auditEvents.map((event) => ({
+              id: event.id,
+              cells: [
+                <time key="date" dateTime={event.createdAt.toISOString()}>{event.createdAt.toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })}</time>,
+                <code key="action" className="text-xs">{event.action}</code>,
+                event.actor,
+                event.target ?? "—",
+              ],
+            }))} />
+        </Card>
+      </section>
+
+      <section id="maintenance" className="console-section">
+        <SectionHeader title="Обслуживание">
+          <a href="#maintenance-controls" className="text-sm text-accent underline underline-offset-4">Технический режим</a>
+        </SectionHeader>
         <SiteRestartCard />
-        <Card>
-          <h2 className="text-lg font-semibold text-white">Журнал операций</h2>
-          <p className="mt-2 text-sm text-zinc-400">
-            Telegram · В очереди {queuedNotifications} · Ошибок доставки {failedNotifications}
-          </p>
-          {auditEvents.length ? (
-            <ul className="mt-3 space-y-2 text-sm text-zinc-300">
-              {auditEvents.map((event) => (
-                <li key={event.id} className="break-words">
-                  <time dateTime={event.createdAt.toISOString()}>{event.createdAt.toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })}</time>
-                  {" · "}{event.action}{" · "}{event.actor}{event.target ? ` · ${event.target}` : ""}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </Card>
-
-        <Card>
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <Badge>Auto provisioning</Badge>
-              <h2 className="mt-4 text-2xl font-bold uppercase tracking-[0.08em] text-white">
-                Автоподготовка нод
-              </h2>
-              <p className="mt-3 text-sm leading-7 text-zinc-400">
-                Закупка VPS в Aeza, настройка DNS в Timeweb и подготовка ноды в Remnawave.
-              </p>
-              <div className="mt-4 flex flex-wrap gap-2 text-xs text-zinc-400">
-                <span className="rounded-full border border-white/10 px-3 py-1">
-                  {provisioning.config.enabled ? "enabled" : "disabled"}
-                </span>
-                <span className="rounded-full border border-white/10 px-3 py-1">
-                  {provisioning.config.dryRun ? "dry-run" : "real purchases"}
-                </span>
-                <span className="rounded-full border border-white/10 px-3 py-1">
-                  targets: {provisioning.config.targets.length}
-                </span>
-                <span className="rounded-full border border-white/10 px-3 py-1">
-                  nodes/squad: {provisioning.config.nodesPerSquad}
-                </span>
-                <span className="rounded-full border border-white/10 px-3 py-1">
-                  max squads:{" "}
-                  {Math.floor(
-                    provisioning.config.maxServers / provisioning.config.nodesPerSquad,
-                  )}
-                </span>
-              </div>
-              {provisioning.missing.length ? (
-                <p className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-                  Заполните параметры закупки {provisioning.missing.join(", ")}
-                </p>
-              ) : null}
-            </div>
-            <form action={runProvisioningNowAction}>
-              {provisioning.config.enabled && !provisioning.config.dryRun ? (
-                <label className="mb-3 flex gap-2 text-sm text-amber-200">
-                  <input type="checkbox" name="confirmPaidProvisioning" required />
-                  Подтверждаю возможную покупку VPS
-                </label>
-              ) : null}
-              <PendingButton>Запустить автоподготовку</PendingButton>
-            </form>
-          </div>
-
-          <div className="mt-6 grid gap-3 lg:grid-cols-3">
-            {provisioning.jobs.length ? (
-              provisioning.jobs.map((job) => (
-                <div
-                  key={job.id}
-                  className="rounded-3xl border border-white/10 bg-black/20 p-4"
-                >
-                  <p className="text-xs uppercase tracking-[0.3em] text-zinc-500">
-                    {job.locationName}
-                  </p>
-                  <div className="mt-3 flex items-center justify-between gap-3">
-                    <p className="text-xl font-bold text-white">{job.nodeName}</p>
-                    <span className="rounded-full border border-cyan-400/30 px-3 py-1 text-xs text-cyan-100">
-                      {job.status}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-sm text-zinc-400">{job.fqdn}</p>
-                  {job.groupKey ? (
-                    <p className="mt-2 text-xs text-zinc-500">
-                      group: {job.groupKey} / node {job.nodeIndex ?? "-"}
-                    </p>
-                  ) : null}
-                  {job.serverIp ? (
-                    <p className="mt-2 text-sm text-zinc-300">IP: {job.serverIp}</p>
-                  ) : null}
-                  {job.lastError ? (
-                    <p className="mt-3 text-xs leading-6 text-red-200">{job.lastError}</p>
-                  ) : null}
-                </div>
-              ))
-            ) : (
-              <p className="text-sm text-zinc-400">
-                Задачи появятся после первого запуска автоподготовки.
-              </p>
-            )}
-          </div>
-        </Card>
-
-        <section className="grid gap-4 md:grid-cols-3">
-          <Card>
-            <p className="text-xs uppercase tracking-[0.3em] text-zinc-500">Пользователи</p>
-            <p className="mt-3 text-3xl font-bold text-white">{activeUsers}</p>
-          </Card>
-          <Card>
-            <p className="text-xs uppercase tracking-[0.3em] text-zinc-500">Суммарный баланс</p>
-            <p className="mt-3 text-3xl font-bold text-white">{formatCurrency(totalBalance)}</p>
-          </Card>
-          <Card>
-            <p className="text-xs uppercase tracking-[0.3em] text-zinc-500">Цена за день</p>
-            <p className="mt-3 text-3xl font-bold text-white">
-              {formatCurrency(settings.pricePerDayKopeks)}
-            </p>
-          </Card>
-        </section>
-
-        <section className="grid gap-4 lg:grid-cols-3">
-          {[
-            { label: "Сегодня", stats: todayStats },
-            { label: "За 7 дней", stats: weekStats },
-            { label: "За 30 дней", stats: monthStats },
-          ].map((item) => (
-            <Card key={item.label} className="border-cyan-400/15 bg-cyan-500/[0.03]">
-              <p className="text-xs uppercase tracking-[0.3em] text-zinc-500">{item.label}</p>
-              <div className="mt-4 grid grid-cols-2 gap-3">
-                <div>
-                  <p className="text-sm text-zinc-400">Новые пользователи</p>
-                  <p className="mt-2 text-3xl font-bold text-white">{item.stats.newUsers}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-zinc-400">Покупатели</p>
-                  <p className="mt-2 text-3xl font-bold text-white">{item.stats.buyers}</p>
-                </div>
-              </div>
-            </Card>
-          ))}
-        </section>
-
-        <AdminOperations
-          maintenanceEnabled={settings.maintenanceEnabled}
-          maintenanceMessage={settings.maintenanceMessage}
-        />
-
-        <section className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
-          <Card>
-            <Badge>Настройки</Badge>
-            <form action={updateSettingsAction} className="mt-6 grid gap-4">
-              <label className="grid gap-2 text-sm text-zinc-300">
-                Цена за 1 день, RUB
-                <input
-                  className="h-12 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-                  defaultValue={settings.pricePerDayKopeks / 100}
-                  name="pricePerDay"
-                  step="0.01"
-                  type="number"
-                />
-              </label>
-              <label className="grid gap-2 text-sm text-zinc-300">
-                Дней в trial
-                <input
-                  className="h-12 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-                  defaultValue={settings.trialDays}
-                  name="trialDays"
-                  type="number"
-                />
-              </label>
-              <label className="grid gap-2 text-sm text-zinc-300">
-                Grace period, часы
-                <input
-                  className="h-12 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-                  defaultValue={settings.deletionGraceHours}
-                  name="deletionGraceHours"
-                  readOnly
-                  type="number"
-                />
-                <span className="text-xs text-zinc-500">
-                  Пополните баланс в течение 24 часов, чтобы сохранить доступ и данные подписки.
-                </span>
-              </label>
-              <label className="grid gap-2 text-sm text-zinc-300">
-                Устройства по умолчанию
-                <input
-                  className="h-12 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-                  defaultValue={settings.defaultHwidDeviceLimit}
-                  name="defaultHwidDeviceLimit"
-                  type="number"
-                />
-              </label>
-              <label className="grid gap-2 text-sm text-zinc-300">
-                Ссылка на поддержку Telegram
-                <input
-                  className="h-12 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-                  defaultValue={settings.supportTelegramUrl ?? ""}
-                  name="supportTelegramUrl"
-                  type="url"
-                />
-              </label>
-              <label className="grid gap-2 text-sm text-zinc-300">
-                Hero-анонс
-                <input
-                  className="h-12 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-                  defaultValue={settings.heroAnnouncement ?? ""}
-                  name="heroAnnouncement"
-                  type="text"
-                />
-              </label>
-              <label className="flex items-center gap-3 text-sm text-zinc-300">
-                <input name="captchaEnabled" type="checkbox" defaultChecked={settings.captchaEnabled} />
-                Включить hCaptcha
-              </label>
-              <PendingButton>Сохранить настройки</PendingButton>
-            </form>
-          </Card>
-
-          <Card>
-            <Badge>Сквады</Badge>
-            <h2 className="mt-4 text-2xl font-bold uppercase tracking-[0.08em] text-white">
-              Привязка к Remnawave
-            </h2>
-            <p className="mt-3 text-sm leading-7 text-zinc-400">
-              Сквад создается в панели, а здесь вы только добавляете его UUID, лимит пользователей
-              и удобное название.
-            </p>
-
-            <SquadManager
-              squads={squads.map((squad) => ({
-                id: squad.id,
-                name: squad.name,
-                memberLimit: squad.memberLimit,
-                isActive: squad.isActive,
-                remnawaveInternalSquadUuid: squad.remnawaveInternalSquadUuid,
-                userCount: squad._count.users,
-              }))}
-            />
-          </Card>
-        </section>
-
-        <section className="space-y-4">
-          <div className="space-y-3">
-            <Badge>Поиск пользователя</Badge>
-            <h2 className="text-2xl font-bold uppercase tracking-[0.08em] text-white">
-              Найти по ID
-            </h2>
-          </div>
-
-          <Card>
-            <form className="grid gap-3 md:grid-cols-[1fr_auto]" method="get">
-              <input
-                className="h-12 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-                defaultValue={normalizedQuery ?? ""}
-                name="user"
-                placeholder="Введите короткий ID пользователя"
-                type="text"
-              />
-              <Button type="submit">Показать пользователя</Button>
-            </form>
-          </Card>
-
-          {normalizedQuery ? (
-            searchedUser ? (
-              (() => {
-                const effectiveDeviceCount = Math.max(
-                  1,
-                  searchedUser.hwidDeviceLimit ?? settings.defaultHwidDeviceLimit,
-                );
-                const remainingDays =
-                  settings.pricePerDayKopeks > 0
-                    ? searchedUser.balanceKopeks / (settings.pricePerDayKopeks * effectiveDeviceCount)
-                    : 0;
-                const vpnStatus = getVpnStatusLabel({
-                  isBanned: searchedUser.isBanned,
-                  balanceKopeks: searchedUser.balanceKopeks,
-                  vpnProvisionState: searchedUser.vpnProvisionState,
-                });
-
-                return (
-                  <UserManagerModal
-                    user={{
-                      id: searchedUser.id,
-                      publicId: searchedUser.publicId ?? "pending",
-                      email: searchedUser.email,
-                      squadName: searchedUser.squad?.name ?? "не назначен",
-                      remnawaveUserUuid: searchedUser.remnawaveUserUuid ?? "ещё не создан",
-                      subscriptionUrl:
-                        searchedUser.subscriptionUrl ?? "Ссылка подписки ещё не сгенерирована",
-                      balance: formatCurrency(searchedUser.balanceKopeks),
-                      remainingDays: formatDays(remainingDays),
-                      deviceCount: effectiveDeviceCount,
-                      hwidDeviceLimit: searchedUser.hwidDeviceLimit,
-                      defaultHwidDeviceLimit: settings.defaultHwidDeviceLimit,
-                      vpnStatus,
-                      vpnProvisionState: searchedUser.vpnProvisionState,
-                      vpnStatusMessage:
-                        searchedUser.vpnStatusMessage ?? "Синхронизация ещё не запускалась.",
-                      isBanned: searchedUser.isBanned,
-                      transactions: searchedUser.transactions.map((transaction) => ({
-                        id: transaction.id,
-                        label: getTransactionLabel(transaction.type),
-                        description: transaction.description,
-                        amount: formatCurrency(transaction.amountKopeks),
-                        positive: transaction.amountKopeks >= 0,
-                        createdAt: transaction.createdAt.toLocaleString("ru-RU"),
-                      })),
-                    }}
-                  />
-                );
-              })()
-            ) : (
-              <Card>
-                <p className="text-sm text-zinc-400">Пользователь с таким ID не найден.</p>
-              </Card>
-            )
-          ) : (
-            <Card>
-              <p className="text-sm text-zinc-400">
-                Введите ID пользователя, чтобы посмотреть его данные, историю и действия.
-              </p>
-            </Card>
-          )}
-        </section>
-      </div>
-    </main>
+      </section>
+    </ConsoleShell>
   );
 }

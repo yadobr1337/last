@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { TelegramLogin } from "@/components/auth/telegram-login";
 import { Button } from "@/components/ui/button";
+import { Notice } from "@/components/ui/feedback";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 
@@ -47,14 +48,14 @@ export function LoginForm() {
           }}
         >
           <div className="space-y-2">
-            <label className="text-sm text-zinc-300">Email</label>
-            <Input name="email" type="email" placeholder="you@domain.com" required />
+            <label htmlFor="login-email" className="text-sm text-muted">Email</label>
+            <Input id="login-email" name="email" type="email" autoComplete="username" placeholder="you@domain.com" required />
           </div>
           <div className="space-y-2">
-            <label className="text-sm text-zinc-300">Пароль</label>
-            <PasswordInput name="password" placeholder="••••••••" required />
+            <label htmlFor="login-password" className="text-sm text-muted">Пароль</label>
+            <PasswordInput id="login-password" name="password" autoComplete="current-password" placeholder="••••••••" required />
           </div>
-          {error ? <p className="text-sm text-red-300">{error}</p> : null}
+          {error ? <Notice tone="danger">{error}</Notice> : null}
           <button
             type="button"
             onClick={() => {
@@ -66,8 +67,8 @@ export function LoginForm() {
           >
             Забыли пароль?
           </button>
-          <Button className="w-full" disabled={pending}>
-            {pending ? "Вход..." : "Войти"}
+          <Button className="w-full" disabled={pending} aria-busy={pending}>
+            {pending ? <><span className="ui-spinner" aria-hidden="true" /> Входим…</> : "Войти"}
           </Button>
         </form>
       ) : (
@@ -105,16 +106,18 @@ export function LoginForm() {
           }}
         >
           <div className="space-y-2">
-            <label className="text-sm text-zinc-300">Email</label>
-            <Input name="email" type="email" placeholder="you@domain.com" required />
+            <label htmlFor="reset-email" className="text-sm text-muted">Email</label>
+            <Input id="reset-email" name="email" type="email" autoComplete="email" placeholder="you@domain.com" required />
           </div>
           <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
             <div className="space-y-2">
-              <label className="text-sm text-zinc-300">Код</label>
-              <Input name="code" inputMode="numeric" placeholder="123456" required />
+              <label htmlFor="reset-code" className="text-sm text-muted">Код из письма</label>
+              <Input id="reset-code" name="code" inputMode="numeric" autoComplete="one-time-code" placeholder="123456" required />
             </div>
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              disabled={pending}
               onClick={(event) => {
                 const form = event.currentTarget.form;
                 if (!form) return;
@@ -143,20 +146,20 @@ export function LoginForm() {
                     return;
                   }
 
-                  setMessage("Код для сброса пароля отправлен на email.");
+                  setMessage("Если email подтверждён, на него придёт письмо с кодом.");
                 });
               }}
-              className="mt-7 inline-flex h-12 items-center justify-center rounded-full border border-white/10 bg-white/5 px-5 text-sm font-medium text-white transition hover:-translate-y-0.5 hover:bg-white/10"
+              className="sm:self-end"
             >
               Получить код
-            </button>
+            </Button>
           </div>
           <div className="space-y-2">
-            <label className="text-sm text-zinc-300">Новый пароль</label>
-            <PasswordInput name="password" placeholder="Новый пароль" required />
+            <label htmlFor="reset-password" className="text-sm text-muted">Новый пароль</label>
+            <PasswordInput id="reset-password" name="password" autoComplete="new-password" minLength={8} placeholder="Новый пароль" required />
           </div>
-          {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
-          {error ? <p className="text-sm text-red-300">{error}</p> : null}
+          {message ? <Notice tone="success">{message}</Notice> : null}
+          {error ? <Notice tone="danger">{error}</Notice> : null}
           <button
             type="button"
             onClick={() => {
@@ -174,10 +177,10 @@ export function LoginForm() {
         </form>
       )}
 
-      <div className="flex items-center gap-3 text-xs uppercase tracking-[0.25em] text-zinc-500">
-        <span className="h-px flex-1 bg-white/10" />
+      <div className="flex items-center gap-3 text-sm text-muted">
+        <span className="h-px flex-1 bg-line" />
         Telegram
-        <span className="h-px flex-1 bg-white/10" />
+        <span className="h-px flex-1 bg-line" />
       </div>
 
       <TelegramLogin mode="login" />

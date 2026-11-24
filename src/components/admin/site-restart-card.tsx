@@ -1,68 +1,29 @@
 "use client";
 
 import { useActionState, useEffect } from "react";
-import {
-  restartSiteAction,
-  type SiteRestartActionState,
-} from "@/app/actions";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { restartSiteAction, type SiteRestartActionState } from "@/app/actions";
 import { Card } from "@/components/ui/card";
+import { ConfirmSubmit } from "@/components/ui/dialog";
+import { Notice } from "@/components/ui/feedback";
+import { SectionHeader } from "@/components/ui/page";
 
-const initialState: SiteRestartActionState = {
-  status: "idle",
-  message: "",
-};
+const initialState: SiteRestartActionState = { status: "idle", message: "" };
 
 export function SiteRestartCard() {
-  const [state, action, pending] = useActionState(restartSiteAction, initialState);
-
+  const [state, action] = useActionState(restartSiteAction, initialState);
   useEffect(() => {
-    if (state.status !== "success") {
-      return;
-    }
-
+    if (state.status !== "success") return;
     const reloadTimer = window.setTimeout(() => window.location.reload(), 13_000);
     return () => window.clearTimeout(reloadTimer);
   }, [state.status]);
 
   return (
-    <Card className="border-amber-400/20 bg-amber-500/[0.04]">
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <Badge>Управление сайтом</Badge>
-          <h2 className="mt-4 text-xl font-bold uppercase tracking-[0.08em] text-white">
-            Полная перезагрузка
-          </h2>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">
-            Перезапускает весь процесс сайта. Во время перезапуска он будет недоступен несколько
-            секунд. Запрос обрабатывается максимум за 10 секунд, затем страница обновится сама.
-          </p>
-          {state.message ? (
-            <p
-              aria-live="polite"
-              className={`mt-3 text-sm ${
-                state.status === "error" ? "text-red-200" : "text-emerald-200"
-              }`}
-            >
-              {state.message}
-            </p>
-          ) : null}
-        </div>
-
-        <form
-          action={action}
-          onSubmit={(event) => {
-            if (!window.confirm("Полностью перезапустить сайт прямо сейчас?")) {
-              event.preventDefault();
-            }
-          }}
-        >
-          <Button type="submit" variant="danger" disabled={pending}>
-            {pending ? "Отправляем запрос..." : "Перезагрузить сайт"}
-          </Button>
-        </form>
-      </div>
+    <Card className="space-y-3">
+      <SectionHeader title="Перезапуск сайта" description="Сайт будет временно недоступен. Страница обновится автоматически после запроса." />
+      <form action={action}>
+        <ConfirmSubmit variant="danger" label="Перезапустить" message="Перезапустить весь процесс 1VPN прямо сейчас?">Перезагрузить сайт</ConfirmSubmit>
+      </form>
+      {state.message ? <Notice tone={state.status === "error" ? "danger" : "success"}>{state.message}</Notice> : null}
     </Card>
   );
 }

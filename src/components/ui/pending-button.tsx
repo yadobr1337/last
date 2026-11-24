@@ -6,8 +6,8 @@ import { Button, type ButtonProps } from "@/components/ui/button";
 export function PendingButton(props: ButtonProps) {
   const { pending } = useFormStatus();
   return (
-    <Button {...props} disabled={pending || props.disabled}>
-      {pending ? "Подождите..." : props.children}
+    <Button {...props} aria-busy={pending} disabled={pending || props.disabled}>
+      {pending ? <><span className="ui-spinner" aria-hidden="true" /> Выполняется…</> : props.children}
     </Button>
   );
 }

@@ -1,248 +1,99 @@
 "use client";
 
-import { useActionState, useEffect, useState, useSyncExternalStore } from "react";
-import { createPortal } from "react-dom";
+import { useActionState, useState } from "react";
 import { Gift, Radio, Wrench } from "lucide-react";
 import {
-  broadcastTelegramAction,
-  grantDaysToAllUsersAction,
-  updateMaintenanceAction,
+  broadcastTelegramAction, grantDaysToAllUsersAction, updateMaintenanceAction,
   type AdminOperationActionState,
 } from "@/app/actions";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { CheckField } from "@/components/ui/check-field";
+import { ConfirmSubmit, Modal } from "@/components/ui/dialog";
+import { Notice } from "@/components/ui/feedback";
+import { Input } from "@/components/ui/input";
 import { PendingButton } from "@/components/ui/pending-button";
 
 type Operation = "days" | "maintenance" | "broadcast";
-
-const initialState: AdminOperationActionState = {
-  status: "idle",
-  message: "",
-};
+const initialState: AdminOperationActionState = { status: "idle", message: "" };
 
 function ResultMessage({ state }: { state: AdminOperationActionState }) {
   if (!state.message) return null;
-
-  return (
-    <p
-      aria-live="polite"
-      className={state.status === "error" ? "text-sm text-red-300" : "text-sm text-emerald-300"}
-    >
-      {state.message}
-    </p>
-  );
+  return <Notice tone={state.status === "error" ? "danger" : "success"}>{state.message}</Notice>;
 }
 
-function OperationModal({
-  title,
-  description,
-  onClose,
-  children,
-}: {
-  title: string;
-  description: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
-  return createPortal(
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center p-3 sm:p-5">
-      <button
-        type="button"
-        aria-label="Закрыть окно"
-        className="absolute inset-0 bg-black/80 backdrop-blur-md"
-        onClick={onClose}
-      />
-      <div className="relative z-10 max-h-[92dvh] w-full max-w-2xl overflow-y-auto rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(16,20,29,0.99),rgba(8,11,17,0.99))] p-5 shadow-[0_28px_120px_rgba(0,0,0,0.7)] sm:p-7">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <Badge>Массовое управление</Badge>
-            <h2 className="mt-4 text-2xl font-bold uppercase tracking-[0.06em] text-white">
-              {title}
-            </h2>
-            <p className="mt-2 text-sm leading-7 text-zinc-400">{description}</p>
-          </div>
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Закрыть
-          </Button>
-        </div>
-        <div className="mt-6">{children}</div>
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
-export function AdminOperations({
-  maintenanceEnabled,
-  maintenanceMessage,
-}: {
-  maintenanceEnabled: boolean;
-  maintenanceMessage: string | null;
+export function AdminOperations({ maintenanceEnabled, maintenanceMessage }: {
+  maintenanceEnabled: boolean; maintenanceMessage: string | null;
 }) {
   const [operation, setOperation] = useState<Operation | null>(null);
   const [grantRequestId, setGrantRequestId] = useState("");
-  const mounted = useSyncExternalStore(
-    () => () => undefined,
-    () => true,
-    () => false,
-  );
   const [daysState, daysAction] = useActionState(grantDaysToAllUsersAction, initialState);
-  const [maintenanceState, maintenanceAction] = useActionState(
-    updateMaintenanceAction,
-    initialState,
-  );
-  const [broadcastState, broadcastAction] = useActionState(
-    broadcastTelegramAction,
-    initialState,
-  );
-
-  useEffect(() => {
-    if (!operation) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [operation]);
+  const [maintenanceState, maintenanceAction] = useActionState(updateMaintenanceAction, initialState);
+  const [broadcastState, broadcastAction] = useActionState(broadcastTelegramAction, initialState);
+  const close = () => setOperation(null);
+  const cards = [
+    { operation: "days", id: "gift-days", icon: Gift, title: "Подарочные дни", description: "Добавьте пользователям баланс на выбранное количество дней с учётом лимита устройств.", label: "Начислить дни" },
+    { operation: "maintenance", id: "maintenance-controls", icon: Wrench, title: "Технический режим", description: "Временно закройте сайт для пользователей. Администраторы смогут войти.", label: maintenanceEnabled ? "Режим включён" : "Настроить режим" },
+    { operation: "broadcast", id: "broadcast", icon: Radio, title: "Telegram-рассылка", description: "Отправьте сообщение с изображением или без него в привязанные аккаунты.", label: "Создать рассылку" },
+  ] as const;
 
   return (
     <>
-      <section className="grid gap-4 lg:grid-cols-3">
-        <Card className="border-cyan-400/20 bg-cyan-500/[0.04]">
-          <Gift className="h-6 w-6 text-cyan-200" />
-          <h2 className="mt-4 text-xl font-bold uppercase tracking-[0.06em] text-white">
-            Пополнить всем
-          </h2>
-          <p className="mt-2 min-h-14 text-sm leading-6 text-zinc-400">
-            Добавить каждому пользователю баланс на стоимость указанного количества дней.
-          </p>
-          <Button className="mt-5" onClick={() => {
-            setGrantRequestId(crypto.randomUUID());
-            setOperation("days");
-          }}>
-            Открыть
-          </Button>
-        </Card>
+      <div className="grid gap-3 lg:grid-cols-3">
+        {cards.map(({ operation: target, id, title, description, label, icon: Icon }) => (
+          <Card id={id} key={target} className="console-section flex flex-col items-start gap-3">
+            <span className="benefit-icon"><Icon size={21} aria-hidden="true" /></span>
+            <h3 className="text-lg font-semibold tracking-tight">{title}</h3>
+            <p className="mb-1 text-sm leading-relaxed text-muted">{description}</p>
+            <Button type="button" variant="ghost" className="mt-auto" onClick={() => {
+              if (target === "days") setGrantRequestId(crypto.randomUUID());
+              setOperation(target);
+            }}>{label}</Button>
+          </Card>
+        ))}
+      </div>
 
-        <Card className="border-amber-400/20 bg-amber-500/[0.04]">
-          <Wrench className="h-6 w-6 text-amber-200" />
-          <h2 className="mt-4 text-xl font-bold uppercase tracking-[0.06em] text-white">
-            Технический режим
-          </h2>
-          <p className="mt-2 min-h-14 text-sm leading-6 text-zinc-400">
-            Временно закрыть сайт для всех пользователей, кроме администратора.
-          </p>
-          <Button className="mt-5" variant="ghost" onClick={() => setOperation("maintenance")}>
-            {maintenanceEnabled ? "Сейчас включён" : "Настроить"}
-          </Button>
-        </Card>
+      <Modal open={operation === "days"} onClose={close} title="Начислить дни всем"
+        description="Баланс начисляется с учётом текущего лимита устройств каждого пользователя.">
+        <form action={daysAction} className="space-y-4">
+          <input type="hidden" name="requestId" value={grantRequestId} />
+          <label className="grid gap-2 text-sm text-muted">Количество дней
+            <Input min="1" max="3650" name="days" type="number" required />
+          </label>
+          <label className="grid gap-2 text-sm text-muted">Сообщение пользователям
+            <textarea className="ui-input" name="description" maxLength={300} placeholder="Например, подарок за технические работы" />
+          </label>
+          <ConfirmSubmit message="Начисление применяется ко всем пользовательским аккаунтам." label="Начислить дни">Начислить всем</ConfirmSubmit>
+          <ResultMessage state={daysState} />
+        </form>
+      </Modal>
 
-        <Card className="border-violet-400/20 bg-violet-500/[0.04]">
-          <Radio className="h-6 w-6 text-violet-200" />
-          <h2 className="mt-4 text-xl font-bold uppercase tracking-[0.06em] text-white">
-            Telegram-рассылка
-          </h2>
-          <p className="mt-2 min-h-14 text-sm leading-6 text-zinc-400">
-            Отправить сообщение всем аккаунтам, у которых привязан Telegram ID.
-          </p>
-          <Button className="mt-5" variant="ghost" onClick={() => setOperation("broadcast")}>
-            Создать рассылку
-          </Button>
-        </Card>
-      </section>
+      <Modal open={operation === "maintenance"} onClose={close} title="Технический режим"
+        description="В этом режиме пользователи увидят страницу технических работ.">
+        <form action={maintenanceAction} className="space-y-4">
+          <CheckField variant="switch" name="enabled" defaultChecked={maintenanceEnabled}>Включить технический режим</CheckField>
+          <label className="grid gap-2 text-sm text-muted">Сообщение на странице
+            <textarea className="ui-input" defaultValue={maintenanceMessage ?? ""} name="message"
+              placeholder="Сообщите пользователям о работах" />
+          </label>
+          <PendingButton>Сохранить режим</PendingButton>
+          <ResultMessage state={maintenanceState} />
+        </form>
+      </Modal>
 
-      {mounted && operation === "days" ? (
-        <OperationModal
-          title="Начислить дни всем"
-          description="Сайт добавит каждому пользователю сумму на выбранное количество дней с учётом лимита его устройств."
-          onClose={() => setOperation(null)}
-        >
-          <form action={daysAction} className="space-y-4">
-            <input type="hidden" name="requestId" value={grantRequestId} />
-            <label className="grid gap-2 text-sm text-zinc-300">
-              Количество дней
-              <input
-                className="h-12 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-                min="1"
-                max="3650"
-                name="days"
-                required
-                type="number"
-              />
-            </label>
-            <label className="grid gap-2 text-sm text-zinc-300">
-              Сообщение пользователям
-              <textarea
-                className="min-h-28 rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none"
-                name="description"
-                placeholder="Например: подарок за технические работы"
-              />
-            </label>
-            <PendingButton>Начислить всем</PendingButton>
-            <ResultMessage state={daysState} />
-          </form>
-        </OperationModal>
-      ) : null}
-
-      {mounted && operation === "maintenance" ? (
-        <OperationModal
-          title="Технический режим"
-          description="При включении обычные пользователи увидят страницу технических работ. Администратор сможет входить, менять настройки и выключить режим."
-          onClose={() => setOperation(null)}
-        >
-          <form action={maintenanceAction} className="space-y-4">
-            <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-zinc-200">
-              <input name="enabled" type="checkbox" defaultChecked={maintenanceEnabled} />
-              Включить технический режим
-            </label>
-            <label className="grid gap-2 text-sm text-zinc-300">
-              Сообщение на странице
-              <textarea
-                className="min-h-32 rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none"
-                defaultValue={maintenanceMessage ?? ""}
-                name="message"
-                placeholder="Сообщите пользователям, когда сайт вернётся"
-              />
-            </label>
-            <PendingButton>Сохранить режим</PendingButton>
-            <ResultMessage state={maintenanceState} />
-          </form>
-        </OperationModal>
-      ) : null}
-
-      {mounted && operation === "broadcast" ? (
-        <OperationModal
-          title="Telegram-рассылка"
-          description="Сообщение уйдёт всем аккаунтам с Telegram ID. Доставка возможна только тем, кто запускал вашего бота."
-          onClose={() => setOperation(null)}
-        >
-          <form action={broadcastAction} className="space-y-4" encType="multipart/form-data">
-            <label className="grid gap-2 text-sm text-zinc-300">
-              Текст сообщения
-              <textarea
-                className="min-h-40 rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none"
-                maxLength={850}
-                name="text"
-                placeholder="Введите текст рассылки"
-                required
-              />
-            </label>
-            <label className="grid gap-2 text-sm text-zinc-300">
-              Фотография, необязательно
-              <input
-                accept="image/*"
-                className="rounded-2xl border border-dashed border-white/15 bg-black/20 px-4 py-4 text-sm text-zinc-300"
-                name="photo"
-                type="file"
-              />
-              <span className="text-xs text-zinc-500">Поддерживаются изображения до 7 МБ.</span>
-            </label>
-            <PendingButton>Отправить рассылку</PendingButton>
-            <ResultMessage state={broadcastState} />
-          </form>
-        </OperationModal>
-      ) : null}
+      <Modal open={operation === "broadcast"} onClose={close} title="Telegram-рассылка"
+        description="Доставка доступна аккаунтам с Telegram ID, которые запускали бота.">
+        <form action={broadcastAction} className="space-y-4">
+          <label className="grid gap-2 text-sm text-muted">Текст сообщения
+            <textarea className="ui-input" maxLength={850} name="text" placeholder="Введите текст рассылки" required />
+          </label>
+          <label className="grid gap-2 text-sm text-muted">Изображение до 7 МБ, необязательно
+            <Input accept="image/*" name="photo" type="file" />
+          </label>
+          <ConfirmSubmit message="Сообщение будет отправлено подходящим аккаунтам с привязанным Telegram." label="Отправить">Отправить рассылку</ConfirmSubmit>
+          <ResultMessage state={broadcastState} />
+        </form>
+      </Modal>
     </>
   );
 }

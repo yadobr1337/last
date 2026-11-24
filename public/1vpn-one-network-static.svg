@@ -1,0 +1,149 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 720" role="img" aria-labelledby="nv-title nv-desc" class="one-net-logo">
+<title id="nv-title">1VPN Obsidian — цифра 1 в глобальной сети</title>
+<desc id="nv-desc">Хромированная цифра один, соединённая линиями глобальной сети и орбитами данных.</desc>
+<defs>
+  <radialGradient id="nv-halo"><stop offset="0" stop-color="#6A6AFB" stop-opacity=".18"/><stop offset=".46" stop-color="#2E3270" stop-opacity=".09"/><stop offset="1" stop-color="#090A0F" stop-opacity="0"/></radialGradient>
+  <linearGradient id="nv-face" x1=".1" y1="0" x2=".87" y2="1" objectBoundingBox="true"><stop offset="0" stop-color="#657088"/><stop offset=".12" stop-color="#191F2A"/><stop offset=".31" stop-color="#0A0D15"/><stop offset=".57" stop-color="#212634"/><stop offset=".73" stop-color="#080B13"/><stop offset="1" stop-color="#323849"/></linearGradient>
+  <linearGradient id="nv-metal" x1="0" y1=".12" x2="1" y2=".86" objectBoundingBox="true"><stop offset="0" stop-color="#C4D2E7"/><stop offset=".09" stop-color="#3B4354"/><stop offset=".26" stop-color="#B3C4E9"/><stop offset=".37" stop-color="#272C38"/><stop offset=".55" stop-color="#8994B1"/><stop offset=".74" stop-color="#34394C"/><stop offset=".92" stop-color="#A3B2E1"/><stop offset="1" stop-color="#34354A"/></linearGradient>
+  <linearGradient id="nv-edge" x1="0" y1="0" x2="1" y2="1" objectBoundingBox="true"><stop stop-color="#D6DFFF"/><stop offset=".16" stop-color="#7280F7"/><stop offset=".55" stop-color="#202849"/><stop offset=".79" stop-color="#7687FF"/><stop offset="1" stop-color="#E4E4FF"/></linearGradient>
+  <linearGradient id="nv-orbit" x1="0" y1="0" x2="1" y2="0" objectBoundingBox="true"><stop stop-color="#6370FA" stop-opacity=".1"/><stop offset=".3" stop-color="#7685FF" stop-opacity=".83"/><stop offset=".65" stop-color="#D7DFFF"/><stop offset="1" stop-color="#748BFF" stop-opacity=".16"/></linearGradient>
+  <linearGradient id="nv-sheen" x1="0" x2="1"><stop stop-color="white" stop-opacity="0"/><stop offset=".5" stop-color="white" stop-opacity=".26"/><stop offset="1" stop-color="white" stop-opacity="0"/></linearGradient>
+  <filter id="nv-soft" x="-120%" y="-120%" width="340%" height="340%"><feGaussianBlur stdDeviation="12"/></filter>
+  <filter id="nv-little-glow" x="-160%" y="-160%" width="420%" height="420%"><feGaussianBlur stdDeviation="3.5"/></filter>
+  <filter id="nv-shadow" x="-70%" y="-70%" width="240%" height="240%"><feGaussianBlur stdDeviation="27"/></filter>
+  <clipPath id="nv-cut"><path d="M 246 245 L 339 139 Q 354 122 373 122 H 468 Q 485 122 485 140 V 557 Q 485 572 470 572 H 339 Q 324 572 324 557 V 283 L 278 313 Z"/></clipPath>
+
+</defs>
+<ellipse class="nv-halo" cx="362" cy="362" rx="293" ry="299" fill="url(#nv-halo)"/>
+<ellipse cx="367" cy="610" rx="157" ry="25" fill="#5360E7" opacity=".27" filter="url(#nv-shadow)"/>
+<g class="nv-float">
+ <!-- back: data highways -->
+ <g fill="none" stroke-linecap="round">
+  <path d="M 149 468 C 95 370 216 272 443 222 C 558 194 627 218 623 306" stroke="#5863DC" stroke-width="18" opacity=".08" filter="url(#nv-soft)"/>
+  <path d="M 149 468 C 95 370 216 272 443 222 C 558 194 627 218 623 306" stroke="url(#nv-orbit)" stroke-width="1.45" opacity=".5"/>
+  <path class="nv-stream" stroke-dasharray="16 14" d="M 149 468 C 95 370 216 272 443 222 C 558 194 627 218 623 306" stroke="#96A5FF" stroke-width="1.25" opacity=".65"/>
+  <path d="M 546 126 C 622 200 600 319 463 403 C 340 479 190 478 146 434" stroke="#4E58AC" stroke-width="1.1" opacity=".42"/>
+  <path class="nv-stream-fast" stroke-dasharray="4 12" d="M 546 126 C 622 200 600 319 463 403 C 340 479 190 478 146 434" stroke="#8795FF" stroke-width="1.4" opacity=".6"/>
+ </g>
+ <!-- depth of extruded shape, offset for visible bevel -->
+ <path d="M 246 245 L 339 139 Q 354 122 373 122 H 468 Q 485 122 485 140 V 557 Q 485 572 470 572 H 339 Q 324 572 324 557 V 283 L 278 313 Z" transform="translate(13 12)" fill="#060812" stroke="#23294A" stroke-width="5" opacity=".92"/>
+ <path d="M 246 245 L 339 139 Q 354 122 373 122 H 468 Q 485 122 485 140 V 557 Q 485 572 470 572 H 339 Q 324 572 324 557 V 283 L 278 313 Z" transform="translate(5 5)" fill="url(#nv-metal)" opacity=".9"/>
+ <!-- rim glow -->
+ <path d="M 246 245 L 339 139 Q 354 122 373 122 H 468 Q 485 122 485 140 V 557 Q 485 572 470 572 H 339 Q 324 572 324 557 V 283 L 278 313 Z" fill="none" stroke="#6775FC" stroke-width="16" opacity=".28" filter="url(#nv-soft)"/>
+ <path d="M 246 245 L 339 139 Q 354 122 373 122 H 468 Q 485 122 485 140 V 557 Q 485 572 470 572 H 339 Q 324 572 324 557 V 283 L 278 313 Z" fill="url(#nv-face)" stroke="url(#nv-metal)" stroke-width="9" stroke-linejoin="round"/>
+ <path d="M 246 245 L 339 139 Q 354 122 373 122 H 468 Q 485 122 485 140 V 557 Q 485 572 470 572 H 339 Q 324 572 324 557 V 283 L 278 313 Z" fill="none" stroke="url(#nv-edge)" stroke-width="2.2" stroke-linejoin="round"/>
+ <path d="M 355 147 L 357 549 M 459 154 L 459 552" stroke="#D4DAFF" stroke-opacity=".15" stroke-width="2"/>
+ <g clip-path="url(#nv-cut)">
+   <!-- glass sheen, latitude arcs, and network mesh are clipped to the numeral -->
+   <path d="M 304 130 Q 371 90 480 147 L 479 592 L 379 550 Z" fill="url(#nv-sheen)" class="nv-shimmer"/>
+   <path d="M 230 218 Q 375 287 515 181 M 242 294 Q 363 331 510 267 M 283 393 Q 410 449 511 350 M 291 488 Q 417 538 523 470" fill="none" stroke="#899AFC" stroke-width="1" opacity=".21"/>
+   <g stroke="#8998FF" stroke-width="1.05" stroke-opacity=".27" fill="none">
+<path d="M 284.2 150.8 L 336.8 149.5" />
+<path d="M 284.2 150.8 L 278.5 192.2" />
+<path d="M 336.8 149.5 L 375.1 151.2" />
+<path d="M 336.8 149.5 L 323.5 199.3" />
+<path d="M 375.1 151.2 L 415.0 150.2" />
+<path d="M 375.1 151.2 L 378.1 188.6" />
+<path d="M 415.0 150.2 L 467.1 154.1" />
+<path d="M 467.1 154.1 L 427.7 201.5" />
+<path d="M 467.1 154.1 L 467.5 196.6" />
+<path d="M 278.5 192.2 L 323.5 199.3" />
+<path d="M 278.5 192.2 L 279.5 233.2" />
+<path d="M 323.5 199.3 L 279.5 233.2" />
+<path d="M 323.5 199.3 L 330.5 233.8" />
+<path d="M 378.1 188.6 L 427.7 201.5" />
+<path d="M 378.1 188.6 L 370.0 236.4" />
+<path d="M 427.7 201.5 L 467.5 196.6" />
+<path d="M 427.7 201.5 L 412.5 239.5" />
+<path d="M 467.5 196.6 L 464.0 244.8" />
+<path d="M 279.5 233.2 L 330.5 233.8" />
+<path d="M 330.5 233.8 L 370.0 236.4" />
+<path d="M 370.0 236.4 L 412.5 239.5" />
+<path d="M 412.5 239.5 L 464.0 244.8" />
+<path d="M 412.5 239.5 L 430.3 281.9" />
+<path d="M 464.0 244.8 L 430.3 281.9" />
+<path d="M 341.3 287.0 L 386.0 287.3" />
+<path d="M 341.3 287.0 L 349.0 336.9" />
+<path d="M 386.0 287.3 L 430.3 281.9" />
+<path d="M 386.0 287.3 L 391.4 332.9" />
+<path d="M 430.3 281.9 L 428.0 326.2" />
+<path d="M 349.0 336.9 L 391.4 332.9" />
+<path d="M 349.0 336.9 L 337.6 369.0" />
+<path d="M 391.4 332.9 L 428.0 326.2" />
+<path d="M 391.4 332.9 L 390.3 373.6" />
+<path d="M 428.0 326.2 L 436.5 373.4" />
+<path d="M 337.6 369.0 L 390.3 373.6" />
+<path d="M 390.3 373.6 L 436.5 373.4" />
+<path d="M 390.3 373.6 L 378.0 415.9" />
+<path d="M 436.5 373.4 L 437.6 419.6" />
+<path d="M 348.3 424.9 L 378.0 415.9" />
+<path d="M 348.3 424.9 L 348.7 463.6" />
+<path d="M 378.0 415.9 L 437.6 419.6" />
+<path d="M 378.0 415.9 L 379.2 466.8" />
+<path d="M 437.6 419.6 L 435.5 461.8" />
+<path d="M 348.7 463.6 L 379.2 466.8" />
+<path d="M 348.7 463.6 L 334.4 507.7" />
+<path d="M 379.2 466.8 L 435.5 461.8" />
+<path d="M 379.2 466.8 L 393.4 513.6" />
+<path d="M 379.2 466.8 L 424.9 506.4" />
+<path d="M 435.5 461.8 L 424.9 506.4" />
+<path d="M 334.4 507.7 L 393.4 513.6" />
+<path d="M 393.4 513.6 L 424.9 506.4" />
+   </g>
+   <g fill="#A5B0FF" opacity=".88">
+<circle cx="284.2" cy="150.8" r="2.8" class="node-pulse" style="--delay:-0.00s"/>
+<circle cx="336.8" cy="149.5" r="1.6" class="node-pulse" style="--delay:-0.43s"/>
+<circle cx="375.1" cy="151.2" r="1.6" class="node-pulse" style="--delay:-0.86s"/>
+<circle cx="415.0" cy="150.2" r="1.6" class="node-pulse" style="--delay:-1.29s"/>
+<circle cx="467.1" cy="154.1" r="2.8" class="node-pulse" style="--delay:-1.72s"/>
+<circle cx="278.5" cy="192.2" r="1.6" class="node-pulse" style="--delay:-2.15s"/>
+<circle cx="323.5" cy="199.3" r="1.6" class="node-pulse" style="--delay:-2.58s"/>
+<circle cx="378.1" cy="188.6" r="1.6" class="node-pulse" style="--delay:-3.01s"/>
+<circle cx="427.7" cy="201.5" r="2.8" class="node-pulse" style="--delay:-3.44s"/>
+<circle cx="467.5" cy="196.6" r="1.6" class="node-pulse" style="--delay:-3.87s"/>
+<circle cx="279.5" cy="233.2" r="1.6" class="node-pulse" style="--delay:-4.30s"/>
+<circle cx="330.5" cy="233.8" r="1.6" class="node-pulse" style="--delay:-0.00s"/>
+<circle cx="370.0" cy="236.4" r="2.8" class="node-pulse" style="--delay:-0.43s"/>
+<circle cx="412.5" cy="239.5" r="1.6" class="node-pulse" style="--delay:-0.86s"/>
+<circle cx="464.0" cy="244.8" r="1.6" class="node-pulse" style="--delay:-1.29s"/>
+<circle cx="341.3" cy="287.0" r="1.6" class="node-pulse" style="--delay:-1.72s"/>
+<circle cx="386.0" cy="287.3" r="2.8" class="node-pulse" style="--delay:-2.15s"/>
+<circle cx="430.3" cy="281.9" r="1.6" class="node-pulse" style="--delay:-2.58s"/>
+<circle cx="349.0" cy="336.9" r="1.6" class="node-pulse" style="--delay:-3.01s"/>
+<circle cx="391.4" cy="332.9" r="1.6" class="node-pulse" style="--delay:-3.44s"/>
+<circle cx="428.0" cy="326.2" r="2.8" class="node-pulse" style="--delay:-3.87s"/>
+<circle cx="337.6" cy="369.0" r="1.6" class="node-pulse" style="--delay:-4.30s"/>
+<circle cx="390.3" cy="373.6" r="1.6" class="node-pulse" style="--delay:-0.00s"/>
+<circle cx="436.5" cy="373.4" r="1.6" class="node-pulse" style="--delay:-0.43s"/>
+<circle cx="348.3" cy="424.9" r="2.8" class="node-pulse" style="--delay:-0.86s"/>
+<circle cx="378.0" cy="415.9" r="1.6" class="node-pulse" style="--delay:-1.29s"/>
+<circle cx="437.6" cy="419.6" r="1.6" class="node-pulse" style="--delay:-1.72s"/>
+<circle cx="348.7" cy="463.6" r="1.6" class="node-pulse" style="--delay:-2.15s"/>
+<circle cx="379.2" cy="466.8" r="2.8" class="node-pulse" style="--delay:-2.58s"/>
+<circle cx="435.5" cy="461.8" r="1.6" class="node-pulse" style="--delay:-3.01s"/>
+<circle cx="334.4" cy="507.7" r="1.6" class="node-pulse" style="--delay:-3.44s"/>
+<circle cx="393.4" cy="513.6" r="1.6" class="node-pulse" style="--delay:-3.87s"/>
+<circle cx="424.9" cy="506.4" r="2.8" class="node-pulse" style="--delay:-4.30s"/>
+   </g>
+   <path d="M 305 150 Q 460 210 318 415 T 500 576" stroke="#BFC8FF" stroke-opacity=".2" stroke-width="1.2" fill="none"/>
+ </g>
+ <!-- front: visible streaming orbit ribbons -->
+ <g fill="none" stroke-linecap="round">
+  <path d="M 623 306 C 616 428 433 502 226 505 C 151 507 125 487 149 468" stroke="#7B7DFF" stroke-width="16" opacity=".13" filter="url(#nv-soft)"/>
+  <path d="M 623 306 C 616 428 433 502 226 505 C 151 507 125 487 149 468" stroke="url(#nv-orbit)" stroke-width="2.4" opacity=".92"/>
+  <path d="M 623 306 C 616 428 433 502 226 505 C 151 507 125 487 149 468" transform="translate(0 8)" stroke="#6574FF" stroke-width=".7" opacity=".33"/>
+  <path d="M 623 306 C 616 428 433 502 226 505 C 151 507 125 487 149 468" transform="translate(0 -8)" stroke="#AAB5FF" stroke-width=".6" opacity=".25"/>
+  <path class="nv-stream" stroke-dasharray="16 14" d="M 623 306 C 616 428 433 502 226 505 C 151 507 125 487 149 468" stroke="#DCE3FF" stroke-width="1.7" opacity=".95"/>
+  <path d="M 146 434 C 114 391 149 313 260 270 C 368 225 483 205 546 126" stroke="url(#nv-orbit)" stroke-width="1.25" opacity=".56"/>
+  <path class="nv-stream-fast" stroke-dasharray="4 12" d="M 146 434 C 114 391 149 313 260 270 C 368 225 483 205 546 126" stroke="#A0B0FF" stroke-width="1.4" opacity=".75"/>
+ </g>
+ <!-- tiny animated packets travelling along actual orbit -->
+ <g>
+
+ </g>
+
+
+ <g class="nv-star" style="transform-origin:592px 340px"><circle cx="592" cy="340" r="4" fill="#C6CFFF"/><circle cx="592" cy="340" r="12" fill="#7580FF" opacity=".35" filter="url(#nv-little-glow)"/></g>
+ <g class="nv-star" style="animation-delay:-1.3s;transform-origin:177px 485px"><circle cx="177" cy="485" r="2.5" fill="#E6E9FF"/></g>
+ </g>
+</svg>

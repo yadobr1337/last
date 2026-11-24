@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { HCaptchaWidget } from "@/components/auth/hcaptcha-widget";
 import { Button } from "@/components/ui/button";
+import { Notice } from "@/components/ui/feedback";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 
@@ -81,12 +82,12 @@ export function RegisterForm({ captchaEnabled }: { captchaEnabled: boolean }) {
       }}
     >
       <div className="space-y-2">
-        <label className="text-sm text-zinc-300">Email</label>
-        <Input name="email" type="email" placeholder="you@domain.com" required />
+        <label htmlFor="register-email" className="text-sm text-muted">Email</label>
+        <Input id="register-email" name="email" type="email" autoComplete="email" placeholder="you@domain.com" required />
       </div>
       <div className="space-y-2">
-        <label className="text-sm text-zinc-300">Пароль</label>
-        <PasswordInput name="password" placeholder="Минимум 8 символов" minLength={8} required />
+        <label htmlFor="register-password" className="text-sm text-muted">Пароль</label>
+        <PasswordInput id="register-password" name="password" autoComplete="new-password" placeholder="Минимум 8 символов" minLength={8} required />
       </div>
 
       <HCaptchaWidget
@@ -96,9 +97,9 @@ export function RegisterForm({ captchaEnabled }: { captchaEnabled: boolean }) {
         resetSignal={captchaResetSignal}
       />
 
-      {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
-      {error ? <p className="text-sm text-red-300">{error}</p> : null}
-      <Button className="w-full" disabled={pending}>
+      {message ? <Notice tone="success">{message}</Notice> : null}
+      {error ? <Notice tone="danger">{error}</Notice> : null}
+      <Button className="w-full" disabled={pending} aria-busy={pending}>
         {pending ? "Создание..." : "Создать аккаунт"}
       </Button>
 

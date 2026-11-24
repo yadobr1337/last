@@ -1,145 +1,88 @@
 "use client";
 
 import { useActionState } from "react";
-import {
-  createSquadAction,
-  deleteSquadAction,
-  updateSquadLimitAction,
-  type SquadActionState,
-} from "@/app/actions";
-import { Button } from "@/components/ui/button";
+import { createSquadAction, deleteSquadAction, updateSquadLimitAction, type SquadActionState } from "@/app/actions";
+import { StatusBadge } from "@/components/ui/badge";
+import { CheckField } from "@/components/ui/check-field";
+import { ConfirmSubmit } from "@/components/ui/dialog";
+import { EmptyState, Notice } from "@/components/ui/feedback";
+import { Input } from "@/components/ui/input";
+import { PendingButton } from "@/components/ui/pending-button";
 
 type SquadItem = {
-  id: string;
-  name: string;
-  memberLimit: number;
-  isActive: boolean;
-  remnawaveInternalSquadUuid: string | null;
-  userCount: number;
+  id: string; name: string; memberLimit: number; isActive: boolean;
+  remnawaveInternalSquadUuid: string | null; userCount: number;
 };
 
-const initialState: SquadActionState = {
-  status: "idle",
-  message: "",
-};
+const initialState: SquadActionState = { status: "idle", message: "" };
 
 function ActionMessage({ state }: { state: SquadActionState }) {
-  if (!state.message) {
-    return null;
-  }
-
-  return (
-    <p
-      aria-live="polite"
-      className={state.status === "error" ? "text-sm text-red-300" : "text-sm text-emerald-300"}
-    >
-      {state.message}
-    </p>
-  );
+  return state.message ? <Notice tone={state.status === "error" ? "danger" : "success"}>{state.message}</Notice> : null;
 }
 
 function SquadRow({ squad }: { squad: SquadItem }) {
-  const [updateState, updateAction, updatePending] = useActionState(
-    updateSquadLimitAction,
-    initialState,
-  );
+  const [updateState, updateAction, updatePending] = useActionState(updateSquadLimitAction, initialState);
   const [deleteState, deleteAction, deletePending] = useActionState(deleteSquadAction, initialState);
 
   return (
-    <div className="rounded-3xl border border-white/10 bg-black/20 p-4">
-      <form action={updateAction} className="grid gap-3 xl:grid-cols-[1fr_1.2fr_160px_auto_auto]">
+    <div className="grid gap-3 rounded-xl border border-line bg-background p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="font-semibold break-words">{squad.name}</p>
+        <StatusBadge tone={squad.isActive ? "success" : "neutral"}>{squad.isActive ? "Активен" : "Выключен"}</StatusBadge>
+      </div>
+      <form action={updateAction} className="grid gap-3">
         <input type="hidden" name="squadId" value={squad.id} />
-        <input
-          className="h-11 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-          defaultValue={squad.name}
-          name="name"
-          placeholder="Название"
-        />
-        <input
-          className="h-11 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-          defaultValue={squad.remnawaveInternalSquadUuid ?? ""}
-          name="remnawaveInternalSquadUuid"
-          placeholder="UUID сквада"
-          required
-        />
-        <input
-          className="h-11 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-          defaultValue={squad.memberLimit}
-          min="1"
-          name="memberLimit"
-          type="number"
-        />
-        <label className="flex items-center gap-2 text-sm text-zinc-300">
-          <input defaultChecked={squad.isActive} name="isActive" type="checkbox" />
-          active
-        </label>
-        <Button type="submit" variant="ghost" disabled={updatePending || deletePending}>
-          {updatePending ? "Проверяем..." : "Обновить"}
-        </Button>
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_minmax(6rem,.6fr)]">
+          <label className="grid gap-2 text-sm text-muted">Название
+            <Input defaultValue={squad.name} name="name" placeholder="Название" />
+          </label>
+          <label className="grid gap-2 text-sm text-muted">UUID Remnawave
+            <Input defaultValue={squad.remnawaveInternalSquadUuid ?? ""} name="remnawaveInternalSquadUuid" placeholder="UUID сквада" required />
+          </label>
+          <label className="grid gap-2 text-sm text-muted">Лимит мест
+            <Input defaultValue={squad.memberLimit} min="1" name="memberLimit" type="number" required />
+          </label>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <CheckField variant="switch" defaultChecked={squad.isActive} name="isActive">Активный сквад</CheckField>
+          <PendingButton variant="ghost" disabled={deletePending}>Обновить</PendingButton>
+        </div>
       </form>
-
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-zinc-400">
-          Занято {squad.userCount} из {squad.memberLimit} мест
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-3">
+        <p className="text-sm text-muted">Занято {squad.userCount} из {squad.memberLimit} мест</p>
         <form action={deleteAction}>
           <input type="hidden" name="squadId" value={squad.id} />
-          <Button type="submit" variant="danger" disabled={deletePending || updatePending}>
-            {deletePending ? "Удаляем..." : "Удалить"}
-          </Button>
+          <ConfirmSubmit variant="danger" disabled={updatePending} label="Удалить сквад"
+            message="Пользователи будут отвязаны от этого сквада. Перераспределение выполнит синхронизация.">Удалить</ConfirmSubmit>
         </form>
       </div>
-
-      <div className="mt-3 space-y-2">
-        <ActionMessage state={updateState} />
-        <ActionMessage state={deleteState} />
-      </div>
+      <ActionMessage state={updateState} />
+      <ActionMessage state={deleteState} />
     </div>
   );
 }
 
 export function SquadManager({ squads }: { squads: SquadItem[] }) {
-  const [createState, createAction, createPending] = useActionState(createSquadAction, initialState);
-
+  const [createState, createAction] = useActionState(createSquadAction, initialState);
   return (
-    <>
-      <form action={createAction} className="mt-6 grid gap-4 xl:grid-cols-[1.1fr_1fr_180px_auto]">
-        <input
-          className="h-12 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-          name="remnawaveInternalSquadUuid"
-          placeholder="UUID сквада Remnawave"
-          required
-        />
-        <input
-          className="h-12 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-          name="name"
-          placeholder="Название для админки"
-        />
-        <input
-          className="h-12 rounded-2xl border border-white/10 bg-black/30 px-4 text-white"
-          min="1"
-          name="memberLimit"
-          placeholder="Лимит"
-          required
-          type="number"
-        />
-        <Button type="submit" disabled={createPending}>
-          {createPending ? "Проверяем..." : "Добавить сквад"}
-        </Button>
-      </form>
-      <div className="mt-3">
+    <div className="grid gap-4">
+      <form action={createAction} className="grid gap-3 rounded-xl border border-line p-4">
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(6rem,.6fr)]">
+          <label className="grid gap-2 text-sm text-muted">UUID сквада
+            <Input name="remnawaveInternalSquadUuid" placeholder="UUID из Remnawave" required />
+          </label>
+          <label className="grid gap-2 text-sm text-muted">Название
+            <Input name="name" placeholder="Название для админки" />
+          </label>
+          <label className="grid gap-2 text-sm text-muted">Лимит мест
+            <Input min="1" name="memberLimit" required type="number" />
+          </label>
+        </div>
+        <div><PendingButton>Добавить сквад</PendingButton></div>
         <ActionMessage state={createState} />
-      </div>
-
-      <div className="mt-6 space-y-3">
-        {squads.length ? (
-          squads.map((squad) => <SquadRow key={squad.id} squad={squad} />)
-        ) : (
-          <div className="rounded-3xl border border-dashed border-white/10 bg-black/20 p-5 text-sm text-zinc-400">
-            Сквады ещё не добавлены. Пользователи будут ожидать назначения в свободный сквад.
-          </div>
-        )}
-      </div>
-    </>
+      </form>
+      {squads.length ? squads.map((squad) => <SquadRow key={squad.id} squad={squad} />)
+        : <EmptyState>Сквады пока не добавлены. Пользователи ожидают свободного сквада.</EmptyState>}
+    </div>
   );
 }
