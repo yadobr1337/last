@@ -19,12 +19,12 @@ type TelegramLoginProps = {
 
 export function TelegramLogin({ mode = "login", onLinked }: TelegramLoginProps) {
   const router = useRouter();
+  const botUsername = publicEnv.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME?.trim().replace(/^@/, "");
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
   useEffect(() => {
-    const botUsername = publicEnv.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME;
     if (!botUsername || !containerRef.current) {
       return;
     }
@@ -58,7 +58,7 @@ export function TelegramLogin({ mode = "login", onLinked }: TelegramLoginProps) 
         ...user,
         redirect: false,
         callbackUrl: "/dashboard",
-      });
+      }).catch(() => null);
 
       if (!result?.ok || result.error) {
         setError(result?.error ?? "Не удалось войти через Telegram.");
@@ -72,6 +72,7 @@ export function TelegramLogin({ mode = "login", onLinked }: TelegramLoginProps) 
     const script = document.createElement("script");
     script.src = "https://telegram.org/js/telegram-widget.js?22";
     script.async = true;
+    script.onerror = () => setError("Виджет Telegram не удалось загрузить. Обновите страницу и попробуйте снова.");
     script.setAttribute("data-telegram-login", botUsername);
     script.setAttribute("data-size", "large");
     script.setAttribute("data-radius", "999");
@@ -83,11 +84,12 @@ export function TelegramLogin({ mode = "login", onLinked }: TelegramLoginProps) 
     containerRef.current.appendChild(script);
 
     return () => {
+      script.onerror = null;
       delete window.onTelegramAuth;
     };
-  }, [mode, onLinked, router]);
+  }, [botUsername, mode, onLinked, router]);
 
-  if (!publicEnv.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME) {
+  if (!botUsername) {
     return <Notice>Вход через Telegram сейчас недоступен.</Notice>;
   }
 

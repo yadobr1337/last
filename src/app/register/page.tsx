@@ -4,6 +4,7 @@ import { RegisterForm } from "@/components/auth/register-form";
 import { TelegramLogin } from "@/components/auth/telegram-login";
 import { MaintenanceScreen } from "@/components/maintenance-screen";
 import { getAuthSession } from "@/lib/auth";
+import { getCaptchaSiteKey } from "@/lib/captcha";
 import { getSettings } from "@/lib/settings";
 
 export default async function RegisterPage() {
@@ -13,7 +14,7 @@ export default async function RegisterPage() {
 
   return (
     <AuthFrame title="Создать аккаунт" description="После регистрации подтвердите email кодом из письма.">
-      <RegisterForm captchaEnabled={settings.captchaEnabled} />
+      <RegisterForm captchaEnabled={settings.captchaEnabled} captchaSiteKey={settings.captchaEnabled ? getCaptchaSiteKey() : undefined} />
       <div className="my-6 flex items-center gap-3 text-sm text-muted">
         <span className="h-px flex-1 bg-line" /> Telegram <span className="h-px flex-1 bg-line" />
       </div>

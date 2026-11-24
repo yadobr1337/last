@@ -316,6 +316,11 @@ the1vpn.ru
 
 The domain must not contain `https://` or a path.
 
+Use the username and the Bot API token for the same bot. Rebuild the application
+after changing `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME`. The website widget uses signed
+Telegram login data. The webhook below handles bot messages, account linking,
+and trial activation.
+
 After HTTPS works, register the webhook on the new VPS:
 
 ```bash
@@ -361,7 +366,20 @@ Expected fields:
 `last_error_message` should be absent. Test linking from the account settings
 and send `/start` to the bot.
 
-## 11. Final Verification
+## 11. Enable Yandex SmartCaptcha
+
+Create a CAPTCHA in Yandex Cloud and restrict it to `the1vpn.ru` and
+`www.the1vpn.ru` if both serve the registration form. Put the client key in
+`SMARTCAPTCHA_SITE_KEY` and the server key in `SMARTCAPTCHA_SERVER_KEY` in the
+server's `.env`. Restart the service, then enable **Яндекс SmartCaptcha** under
+**Финансы и тарифы → Настройки → Сайт и защита** in `/admin` and save.
+
+The existing CAPTCHA setting applies to email registration. For a migration from
+hCaptcha with CAPTCHA enabled, set both SmartCaptcha keys before updating the
+site to keep email registration available. The public form receives only the
+client key. [Yandex SmartCaptcha quickstart](https://yandex.cloud/ru/docs/smartcaptcha/quickstart)
+
+## 12. Final Verification
 
 ```bash
 curl -fsS https://the1vpn.ru/api/health

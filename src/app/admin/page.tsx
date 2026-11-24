@@ -18,6 +18,7 @@ import { SquadManager } from "@/components/admin/squad-manager";
 import { UserManagerModal, type AdminUserManagerData } from "@/components/admin/user-manager-modal";
 import { runProvisioningNowAction, runSyncNowAction, updateSettingsAction } from "@/app/actions";
 import { requireAdmin } from "@/lib/auth";
+import { getCaptchaSiteKey } from "@/lib/captcha";
 import { db } from "@/lib/db";
 import { getSettings } from "@/lib/settings";
 import { checkRemnawaveConnection } from "@/lib/remnawave";
@@ -111,6 +112,7 @@ export default async function AdminPage({
   searchParams?: SearchParamsInput;
 }) {
   await requireAdmin();
+  const captchaConfigured = Boolean(getCaptchaSiteKey());
 
   const params = searchParams ? await searchParams : {};
   const userQuery = Array.isArray(params.user) ? params.user[0] : params.user;
@@ -312,7 +314,9 @@ export default async function AdminPage({
                   <label className="grid gap-2 text-sm text-muted">Анонс главной
                     <Input defaultValue={settings.heroAnnouncement ?? ""} name="heroAnnouncement" type="text" />
                   </label>
-                  <CheckField variant="switch" name="captchaEnabled" defaultChecked={settings.captchaEnabled}>Включить hCaptcha</CheckField>
+                  <CheckField variant="switch" name="captchaEnabled" defaultChecked={settings.captchaEnabled}
+                    disabled={!settings.captchaEnabled && !captchaConfigured}>Включить Яндекс SmartCaptcha</CheckField>
+                  {!captchaConfigured ? <p className="text-sm text-muted">Укажите ключи SmartCaptcha на сервере.</p> : null}
                 </div>
               ) },
             ]} />

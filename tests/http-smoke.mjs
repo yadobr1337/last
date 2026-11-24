@@ -80,7 +80,8 @@ try {
       AUTO_PROVISION_ENABLED: "false", PAYMENTS_AUTO_APPROVE: "true",
       CRON_SECRET: "", YOOKASSA_SHOP_ID: "", YOOKASSA_SECRET_KEY: "", YOOKASSA_WEBHOOK_SECRET: "",
       REMNAWAVE_BASE_URL: "", REMNAWAVE_API_TOKEN: "", TELEGRAM_BOT_TOKEN: "", TELEGRAM_WEBHOOK_SECRET: "",
-      AEZA_API_TOKEN: "", TIMEWEB_CLOUD_TOKEN: "", SMTP_HOST: "", HCAPTCHA_SECRET_KEY: "",
+      AEZA_API_TOKEN: "", TIMEWEB_CLOUD_TOKEN: "", SMTP_HOST: "",
+      SMARTCAPTCHA_SITE_KEY: "", SMARTCAPTCHA_SERVER_KEY: "",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -115,6 +116,12 @@ try {
 
   const malformedRegister = await request("/api/register", { method: "POST", body: "invalid-json" });
   assert.equal(malformedRegister.status, 400);
+  await prisma.systemSettings.update({ where: { id: "default" }, data: { captchaEnabled: true } });
+  const missingCaptchaConfig = await request("/api/register", {
+    method: "POST", body: JSON.stringify({ email: "new@example.test", password, captchaToken: "ignored" }),
+  });
+  assert.equal(missingCaptchaConfig.status, 503);
+  await prisma.systemSettings.update({ where: { id: "default" }, data: { captchaEnabled: false } });
   const registered = await request("/api/register", {
     method: "POST", body: JSON.stringify({ email: "new@example.test", password }),
   });

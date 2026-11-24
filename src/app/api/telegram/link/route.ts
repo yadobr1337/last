@@ -10,6 +10,7 @@ import { queueVpnSync } from "@/lib/billing";
 const telegramPayload = z.object({
   id: z.union([z.string(), z.number().int().positive().max(Number.MAX_SAFE_INTEGER)]).transform(String),
   first_name: z.string(),
+  last_name: z.string().optional(),
   username: z.string().optional(),
   photo_url: z.string().optional(),
   auth_date: z.union([z.string(), z.number().int().positive().max(Number.MAX_SAFE_INTEGER)]).transform(String),

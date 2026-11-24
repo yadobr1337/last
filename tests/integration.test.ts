@@ -8,6 +8,7 @@ import { after, before, test } from "node:test";
 import { Role } from "@prisma/client";
 import { POST as processCron } from "@/app/api/cron/process/route";
 import { POST as yooKassaWebhook } from "@/app/api/payments/yookassa/webhook/route";
+import { POST as register } from "@/app/api/register/route";
 import { authOptions } from "@/lib/auth";
 import { changeBillingSettings, changeDeviceLimit, creditBalance, grantDaysToAllUsers, runLifecycleSweep,
   setBanState, settleUserBilling, syncUserLifecycle, topUpBalance } from "@/lib/billing";
@@ -271,13 +272,62 @@ test("stale JWT cannot retain privilege after deletion or ban", async () => {
   assert.deepEqual(await refresh({ ...token, authVersion: 1 }), {});
 });
 
-test("Telegram widget rejects changed account ID while valid proof verifies", async () => {
-  const auth = { id: "12345", first_name: "Local test", auth_date: String(Math.floor(Date.now() / 1000)) };
+test("Telegram widget signs the last name and accepts the proof only once", async (t) => {
+  const auth = { id: "1234567001", first_name: "Local", last_name: "Test", auth_date: String(Math.floor(Date.now() / 1000)) };
   const data = Object.entries(auth).sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => `${key}=${value}`).join("\n");
   const key = createHash("sha256").update(env.TELEGRAM_BOT_TOKEN!).digest();
   const hash = createHmac("sha256", key).update(data).digest("hex");
   assert.equal((await verifyTelegramAuth({ ...auth, hash })).ok, true);
   assert.equal((await verifyTelegramAuth({ ...auth, id: "99999", hash })).ok, false);
+  assert.equal((await verifyTelegramAuth({ ...auth, last_name: "Changed", hash })).ok, false);
+
+  const provider = authOptions.providers.find((candidate) =>
+    candidate.type === "credentials" && candidate.options.id === "telegram");
+  assert.ok(provider?.type === "credentials" && provider.options.authorize);
+  t.mock.method(globalThis, "fetch", async () => Response.json({ ok: true }));
+  const request = { method: "POST", headers: {}, body: {}, query: {} };
+  const user = await provider.options.authorize({ ...auth, hash }, request);
+  assert.equal(user?.telegramId, auth.id);
+  assert.equal(await provider.options.authorize({ ...auth, hash }, request), null);
+});
+
+test("SmartCaptcha protects email registration and rejects failed, foreign and unavailable proofs", async (t) => {
+  const email = "captcha-fixture@example.test";
+  const password = "offline-mock-password";
+  const settings = await db.systemSettings.findUniqueOrThrow({ where: { id: "default" } });
+  await db.systemSettings.update({ where: { id: settings.id }, data: { captchaEnabled: true } });
+  const host = new URL(env.NEXTAUTH_URL!).host;
+  const validate = (captchaToken?: string) => register(new Request("http://" + host + "/api/register", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-real-ip": "192.0.2.1" },
+    body: JSON.stringify({ email, password, captchaToken }),
+  }));
+
+  const fetchMock = t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+    assert.equal(url, "https://smartcaptcha.cloud.yandex.ru/validate");
+    assert.equal(init.method, "POST");
+    const body = init.body as URLSearchParams;
+    assert.equal(body.get("secret"), env.SMARTCAPTCHA_SERVER_KEY);
+    assert.equal(body.get("ip"), "192.0.2.1");
+    const token = body.get("token");
+    if (token === "service-error") return new Response("", { status: 502 });
+    if (token === "wrong-host") return Response.json({ status: "ok", host: "elsewhere.example.test" });
+    if (token === "accepted") return Response.json({ status: "ok", host });
+    return Response.json({ status: "failed" });
+  });
+
+  try {
+    assert.equal((await validate()).status, 400);
+    assert.equal(fetchMock.mock.callCount(), 0);
+    assert.equal((await validate("rejected")).status, 400);
+    assert.equal((await validate("wrong-host")).status, 400);
+    assert.equal((await validate("service-error")).status, 503);
+    assert.equal(await db.user.findUnique({ where: { email } }), null);
+    assert.equal((await validate("accepted")).status, 200);
+    assert.ok(await db.user.findUnique({ where: { email } }));
+  } finally {
+    await db.systemSettings.update({ where: { id: settings.id }, data: { captchaEnabled: settings.captchaEnabled } });
+  }
 });
 
 test("email code is consumed once under concurrency and repeats are rejected", async () => {

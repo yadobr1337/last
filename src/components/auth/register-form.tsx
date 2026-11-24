@@ -1,27 +1,27 @@
 "use client";
 
-import { useCallback, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { HCaptchaWidget } from "@/components/auth/hcaptcha-widget";
+import { SmartCaptchaWidget } from "@/components/auth/smart-captcha-widget";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/feedback";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 
-export function RegisterForm({ captchaEnabled }: { captchaEnabled: boolean }) {
+export function RegisterForm({ captchaEnabled, captchaSiteKey }: { captchaEnabled: boolean; captchaSiteKey?: string }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [captchaToken, setCaptchaToken] = useState("");
   const [captchaResetSignal, setCaptchaResetSignal] = useState(0);
   const [pending, startTransition] = useTransition();
-  const captchaRequired = captchaEnabled;
-  const resetCaptcha = useCallback(() => {
+  const captchaUnavailable = captchaEnabled && !captchaSiteKey;
+  function resetCaptcha() {
     setCaptchaToken("");
     setCaptchaResetSignal((value) => value + 1);
-  }, []);
+  }
 
   return (
     <form
@@ -32,8 +32,8 @@ export function RegisterForm({ captchaEnabled }: { captchaEnabled: boolean }) {
         setMessage(null);
         const form = event.currentTarget;
 
-        if (captchaRequired && !captchaToken) {
-          setError("Пройдите CAPTCHA перед регистрацией.");
+        if (captchaEnabled && !captchaToken) {
+          setError(captchaUnavailable ? "Регистрация временно недоступна." : "Пройдите SmartCaptcha перед регистрацией.");
           return;
         }
 
@@ -50,11 +50,11 @@ export function RegisterForm({ captchaEnabled }: { captchaEnabled: boolean }) {
               password,
               captchaToken,
             }),
-          });
+          }).catch(() => null);
 
-          const payload = (await response.json()) as { error?: string; emailCodeSent?: boolean };
-          if (!response.ok) {
-            setError(payload.error ?? "Не удалось создать аккаунт.");
+          const payload = (await response?.json().catch(() => null)) as { ok?: boolean; error?: string; emailCodeSent?: boolean } | null | undefined;
+          if (!response?.ok || !payload?.ok) {
+            setError(payload?.error ?? "Не удалось создать аккаунт.");
             resetCaptcha();
             return;
           }
@@ -64,7 +64,7 @@ export function RegisterForm({ captchaEnabled }: { captchaEnabled: boolean }) {
             password,
             redirect: false,
             callbackUrl: "/dashboard",
-          });
+          }).catch(() => null);
 
           if (!result?.ok || result.error) {
             setError("Аккаунт создан. Войдите с указанным email и паролем.");
@@ -90,16 +90,12 @@ export function RegisterForm({ captchaEnabled }: { captchaEnabled: boolean }) {
         <PasswordInput id="register-password" name="password" autoComplete="new-password" placeholder="Минимум 8 символов" minLength={8} required />
       </div>
 
-      <HCaptchaWidget
-        enabled={captchaEnabled}
-        onVerify={setCaptchaToken}
-        onReset={resetCaptcha}
-        resetSignal={captchaResetSignal}
-      />
+      {captchaSiteKey ? <SmartCaptchaWidget siteKey={captchaSiteKey} onVerify={setCaptchaToken} resetSignal={captchaResetSignal} /> : null}
+      {captchaUnavailable ? <Notice tone="danger">Проверка регистрации временно недоступна.</Notice> : null}
 
       {message ? <Notice tone="success">{message}</Notice> : null}
       {error ? <Notice tone="danger">{error}</Notice> : null}
-      <Button className="w-full" disabled={pending} aria-busy={pending}>
+      <Button className="w-full" disabled={pending || captchaUnavailable} aria-busy={pending}>
         {pending ? "Создание..." : "Создать аккаунт"}
       </Button>
 

@@ -5,6 +5,7 @@ import { z } from "zod";
 type TelegramAuthPayload = {
   id: string;
   first_name: string;
+  last_name?: string;
   username?: string;
   photo_url?: string;
   auth_date: string;
@@ -20,7 +21,7 @@ const miniAppUser = z.object({
 
 function buildDataCheckString(payload: Record<string, string | undefined>) {
   return Object.entries(payload)
-    .filter(([key, value]) => key !== "hash" && value)
+    .filter(([key, value]) => key !== "hash" && value !== undefined)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => `${key}=${value}`)
     .join("\n");

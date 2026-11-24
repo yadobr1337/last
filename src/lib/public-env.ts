@@ -8,7 +8,6 @@ const optionalEnv = <T extends z.ZodType>(schema: T) =>
 
 const clientSchema = z.object({
   NEXT_PUBLIC_TELEGRAM_BOT_USERNAME: optionalEnv(z.string()),
-  NEXT_PUBLIC_HCAPTCHA_SITE_KEY: optionalEnv(z.string()),
   NEXT_PUBLIC_OFFER_URL: optionalEnv(z.string().url()),
   NEXT_PUBLIC_PRIVACY_URL: optionalEnv(z.string().url()),
   NEXT_PUBLIC_SUPPORT_TELEGRAM_URL: optionalEnv(z.string().url()),
@@ -17,7 +16,6 @@ const clientSchema = z.object({
 
 export const publicEnv = clientSchema.parse({
   NEXT_PUBLIC_TELEGRAM_BOT_USERNAME: process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME,
-  NEXT_PUBLIC_HCAPTCHA_SITE_KEY: process.env.NEXT_PUBLIC_HCAPTCHA_SITE_KEY,
   NEXT_PUBLIC_OFFER_URL: process.env.NEXT_PUBLIC_OFFER_URL,
   NEXT_PUBLIC_PRIVACY_URL: process.env.NEXT_PUBLIC_PRIVACY_URL,
   NEXT_PUBLIC_SUPPORT_TELEGRAM_URL: process.env.NEXT_PUBLIC_SUPPORT_TELEGRAM_URL,

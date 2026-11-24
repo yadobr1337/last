@@ -140,6 +140,7 @@ export const authOptions: NextAuthOptions = {
       credentials: {
         id: { label: "Telegram ID", type: "text" },
         first_name: { label: "First name", type: "text" },
+        last_name: { label: "Last name", type: "text" },
         username: { label: "Username", type: "text" },
         photo_url: { label: "Photo URL", type: "text" },
         auth_date: { label: "Auth date", type: "text" },
@@ -153,6 +154,7 @@ export const authOptions: NextAuthOptions = {
         const verification = await verifyTelegramAuth({
           id: credentials.id,
           first_name: credentials.first_name,
+          last_name: credentials.last_name,
           username: credentials.username,
           photo_url: credentials.photo_url,
           auth_date: credentials.auth_date,

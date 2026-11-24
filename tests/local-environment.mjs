@@ -21,6 +21,8 @@ if (process.env.SITE1VPN_TEST_CHILD !== "1") {
     YOOKASSA_RETURN_URL: "https://local.test/dashboard",
     CRON_SECRET: "",
     TELEGRAM_BOT_TOKEN: "12345:offline-mock",
+    SMARTCAPTCHA_SITE_KEY: "offline-captcha-site-key",
+    SMARTCAPTCHA_SERVER_KEY: "offline-captcha-server-key",
     REMNAWAVE_BASE_URL: "",
     REMNAWAVE_API_TOKEN: "",
     AUTO_PROVISION_ENABLED: "false",

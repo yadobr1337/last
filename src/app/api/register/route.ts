@@ -35,10 +35,16 @@ export async function POST(request: Request) {
   }
 
   if (settings.captchaEnabled) {
-    const captchaOk = await verifyCaptchaToken(payload.captchaToken);
-    if (!captchaOk) {
+    const captcha = await verifyCaptchaToken(payload.captchaToken, request.headers.get("x-real-ip"));
+    if (captcha === "unavailable") {
       return NextResponse.json(
-        { error: "Пройдите CAPTCHA перед регистрацией." },
+        { error: "SmartCaptcha временно недоступна. Попробуйте позже." },
+        { status: 503 },
+      );
+    }
+    if (captcha === "invalid") {
+      return NextResponse.json(
+        { error: "Пройдите SmartCaptcha перед регистрацией." },
         { status: 400 },
       );
     }
