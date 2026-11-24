@@ -32,9 +32,9 @@ export function AdminOperations({ maintenanceEnabled, maintenanceMessage }: {
   const [broadcastState, broadcastAction] = useActionState(broadcastTelegramAction, initialState);
   const close = () => setOperation(null);
   const cards = [
-    { operation: "days", id: "gift-days", icon: Gift, title: "Подарочные дни", description: "Добавьте пользователям баланс на выбранное количество дней с учётом лимита устройств.", label: "Начислить дни" },
-    { operation: "maintenance", id: "maintenance-controls", icon: Wrench, title: "Технический режим", description: "Временно закройте сайт для пользователей. Администраторы смогут войти.", label: maintenanceEnabled ? "Режим включён" : "Настроить режим" },
-    { operation: "broadcast", id: "broadcast", icon: Radio, title: "Telegram-рассылка", description: "Отправьте сообщение с изображением или без него в привязанные аккаунты.", label: "Создать рассылку" },
+    { operation: "days", id: "gift-days", icon: Gift, title: "Подарочные дни", description: "Пополните баланс всех пользователей на выбранное число дней.", label: "Начислить дни" },
+    { operation: "maintenance", id: "maintenance-controls", icon: Wrench, title: "Технический режим", description: "Покажите посетителям сообщение о работах. Доступ администраторов сохранится.", label: maintenanceEnabled ? "Режим включён" : "Настроить режим" },
+    { operation: "broadcast", id: "broadcast", icon: Radio, title: "Telegram-рассылка", description: "Отправьте сообщение пользователям, которые привязали Telegram через бота.", label: "Создать рассылку" },
   ] as const;
 
   return (
@@ -54,7 +54,7 @@ export function AdminOperations({ maintenanceEnabled, maintenanceMessage }: {
       </div>
 
       <Modal open={operation === "days"} onClose={close} title="Начислить дни всем"
-        description="Баланс начисляется с учётом текущего лимита устройств каждого пользователя.">
+        description="Сумма начисления зависит от тарифа и лимита устройств пользователя.">
         <form action={daysAction} className="space-y-4">
           <input type="hidden" name="requestId" value={grantRequestId} />
           <label className="grid gap-2 text-sm text-muted">Количество дней
@@ -63,7 +63,7 @@ export function AdminOperations({ maintenanceEnabled, maintenanceMessage }: {
           <label className="grid gap-2 text-sm text-muted">Сообщение пользователям
             <textarea className="ui-input" name="description" maxLength={300} placeholder="Например, подарок за технические работы" />
           </label>
-          <ConfirmSubmit message="Начисление применяется ко всем пользовательским аккаунтам." label="Начислить дни">Начислить всем</ConfirmSubmit>
+          <ConfirmSubmit message="Баланс пополнится у всех пользователей." label="Начислить дни">Начислить всем</ConfirmSubmit>
           <ResultMessage state={daysState} />
         </form>
       </Modal>
@@ -82,7 +82,7 @@ export function AdminOperations({ maintenanceEnabled, maintenanceMessage }: {
       </Modal>
 
       <Modal open={operation === "broadcast"} onClose={close} title="Telegram-рассылка"
-        description="Доставка доступна аккаунтам с Telegram ID, которые запускали бота.">
+        description="Добавьте текст и, при необходимости, изображение.">
         <form action={broadcastAction} className="space-y-4">
           <label className="grid gap-2 text-sm text-muted">Текст сообщения
             <textarea className="ui-input" maxLength={850} name="text" placeholder="Введите текст рассылки" required />
@@ -90,7 +90,7 @@ export function AdminOperations({ maintenanceEnabled, maintenanceMessage }: {
           <label className="grid gap-2 text-sm text-muted">Изображение до 7 МБ, необязательно
             <Input accept="image/*" name="photo" type="file" />
           </label>
-          <ConfirmSubmit message="Сообщение будет отправлено подходящим аккаунтам с привязанным Telegram." label="Отправить">Отправить рассылку</ConfirmSubmit>
+          <ConfirmSubmit message="Сообщение получат пользователи, подтвердившие привязку через бота." label="Отправить">Отправить рассылку</ConfirmSubmit>
           <ResultMessage state={broadcastState} />
         </form>
       </Modal>

@@ -17,7 +17,7 @@ export function MaintenanceScreen({ message, showLogin = true, showLogout = fals
           <div className="benefit-icon"><Wrench size={22} aria-hidden="true" /></div>
           <h1 className="mt-5 text-3xl font-bold tracking-tight">Технические работы</h1>
           <p className="mt-3 text-muted leading-relaxed">
-            {message?.trim() || "Мы обновляем 1VPN. Личный кабинет временно недоступен. Действующие подписки продолжают работать."}
+            {message?.trim() || "Обновляем сайт 1VPN. Личный кабинет пока недоступен. Попробуйте зайти чуть позже."}
           </p>
           {(showLogin || showLogout) && <div className="mt-6 flex flex-wrap gap-2">
             {showLogin && <ButtonLink href="/login" variant="ghost">Вход администратора</ButtonLink>}

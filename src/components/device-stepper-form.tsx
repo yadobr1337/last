@@ -20,7 +20,7 @@ export function DeviceStepperForm({ action, currentValue }: {
         <IconButton label="Увеличить количество устройств" disabled={value >= 100}
           onClick={() => setValue((previous) => Math.min(100, previous + 1))}><Plus size={18} aria-hidden="true" /></IconButton>
       </div>
-      <PendingButton variant="ghost">Сохранить лимит</PendingButton>
+      <PendingButton variant="ghost">Сохранить</PendingButton>
     </form>
   );
 }

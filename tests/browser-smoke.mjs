@@ -81,9 +81,13 @@ export async function runBrowserSmoke(executable, origin, root, { email, admin, 
       }, selector, label), label ?? selector);
     };
     const key = async (name) => {
-      const keyCode = { Escape: 27, ArrowRight: 39 }[name];
+      const keyCode = { Escape: 27, Enter: 13, ArrowRight: 39 }[name];
       const event = { key: name, code: name, windowsVirtualKeyCode: keyCode };
-      await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...event });
+      if (name === "Enter") {
+        await send("Input.dispatchKeyEvent", { type: "keyDown", text: "\r", ...event });
+      } else {
+        await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...event });
+      }
       await send("Input.dispatchKeyEvent", { type: "keyUp", ...event });
     };
     const navigate = async (path) => {
@@ -147,7 +151,16 @@ export async function runBrowserSmoke(executable, origin, root, { email, admin, 
     };
 
     await inspect("/", "home");
+    assert.deepEqual(await inPage(() => {
+      const edition = document.querySelector(".site-header .brand-edition");
+      return {
+        title: document.querySelector("main h1").textContent.replace(/\s+/g, " "),
+        edition: edition.textContent,
+        color: getComputedStyle(edition).color,
+      };
+    }), { title: "VPN на каждый день", edition: "STABLE", color: "rgb(99, 216, 160)" });
     assert.equal(await evaluate('document.querySelector(".hero-art img").fetchPriority'), "high");
+    assert.match(await evaluate('document.querySelector("#faq").textContent'), /24\s*часа/);
     assert.ok(!observedRequests.has(origin + "/api/public/settings"), "SSR prices need no duplicate request");
     await viewport(390, 844);
     await click(".mobile-menu summary");
@@ -175,10 +188,23 @@ export async function runBrowserSmoke(executable, origin, root, { email, admin, 
     assert.ok(await logoPixels() === staticFrame, "The logo stays still with reduced motion");
     const staticSvg = await (await fetch(staticLogo)).text();
     assert.doesNotMatch(staticSvg, /<animate|@keyframes/i);
+    await inPage(() => document.querySelector("#faq summary").focus());
+    assert.equal(await evaluate("document.activeElement.tagName"), "SUMMARY");
+    await key("Enter");
+    await waitFor("#faq details[open]");
+    await key("Enter");
+    await until(() => evaluate('!document.querySelector("#faq details[open]")'), "FAQ closes with the keyboard");
 
     await inspect("/login", "login");
     await click("button[aria-label='Показать пароль']");
     assert.equal(await evaluate('document.querySelector("#login-password").type'), "text");
+    await inPage((account) => {
+      const emailField = document.querySelector("#login-email");
+      emailField.value = account;
+      document.querySelector("#login-password").value = "wrong-fixture-password";
+      emailField.form.requestSubmit();
+    }, email);
+    await until(() => evaluate('document.querySelector("form [role=alert]")?.textContent.includes("Проверьте почту и пароль")'), "invalid login feedback");
     await click("button", "Забыли пароль?");
     await waitFor("#reset-email");
     await inspect("/register", "register");
@@ -197,7 +223,7 @@ export async function runBrowserSmoke(executable, origin, root, { email, admin, 
     await until(() => evaluate('document.querySelector("#connection button").textContent.includes("Скопировано")'), "clipboard feedback");
     assert.equal(await evaluate("navigator.clipboard.readText()"), subscription);
 
-    await click("main button", "Пополнить баланс");
+    await click("main button", "Пополнить");
     await waitFor("dialog[open]");
     assert.ok(await evaluate('document.querySelector("dialog[open]").contains(document.activeElement)'));
     assert.ok(await evaluate('document.querySelector("dialog[open]").innerText.includes("Тестовое пополнение")'));
@@ -209,10 +235,10 @@ export async function runBrowserSmoke(executable, origin, root, { email, admin, 
     await capture("billing-mobile");
     await key("Escape");
     await until(() => evaluate('!document.querySelector("dialog[open]")'), "dialog closes with Escape");
-    assert.equal(await evaluate("document.activeElement.textContent.trim()"), "Пополнить баланс");
+    assert.equal(await evaluate("document.activeElement.textContent.trim()"), "Пополнить");
     await click("button[aria-label='Увеличить количество устройств']");
     await until(() => evaluate('document.querySelector("output").textContent === "2"'), "device stepper");
-    await click("#devices button", "Сохранить лимит");
+    await click("#devices button", "Сохранить");
     await until(() => evaluate('performance.getEntriesByType("resource").some((entry) => entry.name.endsWith("/dashboard") && entry.initiatorType === "fetch")'),
       "device limit response");
 
@@ -230,13 +256,26 @@ export async function runBrowserSmoke(executable, origin, root, { email, admin, 
       "keyboard navigation between settings tabs");
     await waitFor('[role=tabpanel]:not([hidden]) input[name=captchaEnabled]');
     await click("[role=tab]", "Тариф и подписка");
-    await inPage(() => { document.querySelector('[name="pricePerDay"]').value = "53"; });
+    await inPage(() => {
+      document.querySelector('[name="pricePerDay"]').value = "53.5";
+      document.querySelector('[name="trialDays"]').value = "3";
+    });
     await click("#finance button", "Сохранить настройки");
-    await until(() => evaluate('fetch("/api/public/settings").then((res) => res.json()).then((data) => data.monthlyPriceKopeks === 159000)'),
+    await until(() => evaluate('fetch("/api/public/settings").then((res) => res.json()).then((data) => data.monthlyPriceKopeks === 160500 && data.trialDays === 3)'),
       "saved daily tariff appears in the public API");
+    const publicCopy = await inPage(async () => {
+      const markup = await (await fetch("/")).text();
+      const page = new DOMParser().parseFromString(markup, "text/html");
+      return {
+        price: page.querySelector(".hero-price").textContent,
+        faq: page.querySelector("#faq").textContent,
+      };
+    });
+    assert.match(publicCopy.price, /53,5\s*₽/);
+    assert.match(publicCopy.faq, /3\s*дня/);
     assert.ok(await evaluate('document.querySelector("#nodes").textContent.includes("Timeweb")'));
     assert.ok(await evaluate('document.querySelector("#notifications").textContent.includes("Telegram")'));
-    assert.ok(await evaluate('document.querySelector("#journal").textContent.includes("Журнал операций")'));
+    assert.ok(await evaluate('document.querySelector("#journal").textContent.includes("Журнал событий")'));
     await inPage((address) => {
       const field = document.querySelector('#users input[name="user"]');
       field.value = address;
@@ -247,11 +286,11 @@ export async function runBrowserSmoke(executable, origin, root, { email, admin, 
     await capture("admin-user-desktop");
     await viewport(390, 844);
     await capture("admin-user-mobile");
-    await click('dialog[open] button', "Забанить пользователя");
+    await click('dialog[open] button', "Заблокировать пользователя");
     await until(() => evaluate('document.querySelectorAll("dialog[open]").length === 2'), "ban confirmation");
     await click('dialog[open] button', "Отмена");
     await until(() => evaluate('document.querySelectorAll("dialog[open]").length === 1'), "confirmation cancelled");
-    await click('dialog[open] button', "Забанить пользователя");
+    await click('dialog[open] button', "Заблокировать пользователя");
     await until(() => evaluate('document.querySelectorAll("dialog[open]").length === 2'), "reopened confirmation");
     const focusState = () => inPage(() => ({
       active: document.activeElement?.getAttribute("aria-label"),

@@ -51,7 +51,7 @@ function BalanceAdjustmentForm({ userId, operation }: { userId: string; operatio
     <form action={action} className="grid gap-3 rounded-xl border border-line bg-background p-3">
       <input type="hidden" name="userId" value={userId} />
       <input type="hidden" name="operation" value={operation} />
-      <h3 className="font-semibold">{credit ? "Добавить сумму" : "Списать сумму"}</h3>
+      <h3 className="font-semibold">{credit ? "Зачислить на баланс" : "Списать с баланса"}</h3>
       <div className="grid gap-2 sm:grid-cols-[minmax(0,.7fr)_minmax(0,1fr)]">
         <label className="grid gap-2 text-sm text-muted">Сумма, ₽
           <Input min="0.01" name="amount" required step="0.01" type="number" />
@@ -61,9 +61,9 @@ function BalanceAdjustmentForm({ userId, operation }: { userId: string; operatio
         </label>
       </div>
       <ConfirmSubmit variant={credit ? "primary" : "danger"}
-        label={credit ? "Добавить" : "Списать"}
+        label={credit ? "Зачислить" : "Списать"}
         message={credit ? "Сумма будет зачислена на баланс этого пользователя." : "Сумма будет списана с баланса этого пользователя."}>
-        {credit ? "Добавить" : "Списать"}
+        {credit ? "Зачислить" : "Списать"}
       </ConfirmSubmit>
       {state.message ? <Notice tone={state.status === "error" ? "danger" : "success"}>{state.message}</Notice> : null}
     </form>
@@ -95,14 +95,14 @@ export function UserManagerModal({ user }: { user: AdminUserManagerData }) {
           </div>
 
           <div className="ui-card grid gap-3">
-            <h3 className="text-lg font-semibold">Remnawave и выдача</h3>
+            <h3 className="text-lg font-semibold">Подписка в Remnawave</h3>
             <Notice tone={user.vpnProvisionState === "ERROR" ? "danger" : "neutral"}>{user.vpnStatusMessage}</Notice>
             <p className="break-words text-sm text-muted">Сквад {user.squadName}</p>
             <p className="break-all text-sm text-muted">UUID {user.remnawaveUserUuid}</p>
             <code className="subscription-link">{user.subscriptionUrl}</code>
             <form action={syncUserNowAction}>
               <input type="hidden" name="userId" value={user.id} />
-              <PendingButton variant="ghost">Повторить выдачу</PendingButton>
+              <PendingButton variant="ghost">Повторить синхронизацию</PendingButton>
             </form>
           </div>
 
@@ -121,8 +121,8 @@ export function UserManagerModal({ user }: { user: AdminUserManagerData }) {
               <input type="hidden" name="ban" value={String(!user.isBanned)} />
               <ConfirmSubmit variant={user.isBanned ? "ghost" : "danger"}
                 label={user.isBanned ? "Разблокировать" : "Заблокировать"}
-                message={user.isBanned ? "Ограничение доступа с этого пользователя будет снято." : "Доступ этого пользователя к кабинету и VPN будет приостановлен."}>
-                {user.isBanned ? "Разбанить пользователя" : "Забанить пользователя"}
+                message={user.isBanned ? "Пользователь снова сможет войти в кабинет." : "Пользователь потеряет доступ к кабинету и VPN."}>
+                {user.isBanned ? "Разблокировать пользователя" : "Заблокировать пользователя"}
               </ConfirmSubmit>
             </form>
           </div>

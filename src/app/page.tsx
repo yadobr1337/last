@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Cable, Globe2, Laptop, Plus, ShieldCheck, Wallet } from "lucide-react";
+import { Cable, Globe2, Laptop, Minus, Plus, ShieldCheck, Wallet } from "lucide-react";
 import { Brand } from "@/components/brand";
 import { MobileNavigation } from "@/components/mobile-navigation";
 import { MaintenanceScreen } from "@/components/maintenance-screen";
@@ -11,7 +11,7 @@ import { getAuthSession } from "@/lib/auth";
 import { env } from "@/lib/env";
 import { getSettings } from "@/lib/settings";
 import { DEFAULT_OFFER_URL, DEFAULT_PRIVACY_URL, DEFAULT_SUPPORT_TELEGRAM_URL } from "@/lib/site";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDuration } from "@/lib/utils";
 
 const sections = [
   { href: "#benefits", label: "Возможности" },
@@ -20,11 +20,11 @@ const sections = [
 ];
 
 const benefits = [
-  { title: "Зашифрованное подключение", description: "Подключайтесь через VPN-туннель. Доступ, баланс и ссылка подписки собраны в личном кабинете.", icon: ShieldCheck },
-  { title: "Быстрый старт", description: "Получите ссылку подписки и добавьте её в совместимое VPN-приложение.", icon: Cable },
-  { title: "Доступ к сети", description: "Открывайте повседневные сайты, сервисы и приложения через VPN.", icon: Globe2 },
-  { title: "Ваши устройства", description: "Меняйте лимит и удаляйте устройства, которыми больше не пользуетесь.", icon: Laptop },
-  { title: "Гибкое пополнение", description: "Выбирайте сумму пополнения и следите за остатком в кабинете.", icon: Wallet },
+  { title: "Всё под рукой", description: "Баланс, ссылка для подключения и настройки устройств всегда доступны в личном кабинете.", icon: ShieldCheck },
+  { title: "Простое подключение", description: "Получите ссылку подписки и добавьте её в подходящее VPN-приложение.", icon: Cable },
+  { title: "Для сайтов и приложений", description: "Пользуйтесь привычными сайтами и приложениями через VPN.", icon: Globe2 },
+  { title: "Несколько устройств", description: "Выбирайте нужное количество подключений и убирайте устройства, которыми больше не пользуетесь.", icon: Laptop },
+  { title: "Оплата по дням", description: "Стоимость зависит от количества устройств. Расходы и остаток баланса видны в кабинете.", icon: Wallet },
 ];
 
 export default async function HomePage() {
@@ -36,17 +36,19 @@ export default async function HomePage() {
   }
 
   const joinHref = session?.user ? "/dashboard" : "/register";
-  const joinLabel = session?.user ? "Открыть кабинет" : "Подключиться";
+  const joinLabel = session?.user ? "Открыть кабинет" : "Подключить VPN";
   const mobileLinks = [...sections, ...(isAdmin ? [{ href: "/admin", label: "Админка" }] : []),
     ...(!session?.user ? [{ href: "/login", label: "Войти" }] : []), { href: joinHref, label: joinLabel }];
   const offerUrl = env.NEXT_PUBLIC_OFFER_URL ?? DEFAULT_OFFER_URL;
   const privacyUrl = env.NEXT_PUBLIC_PRIVACY_URL ?? DEFAULT_PRIVACY_URL;
   const supportUrl = settings.supportTelegramUrl ?? env.NEXT_PUBLIC_SUPPORT_TELEGRAM_URL ?? DEFAULT_SUPPORT_TELEGRAM_URL;
+  const dailyPrice = formatCurrency(settings.pricePerDayKopeks, 2);
+  const gracePeriod = formatDuration(settings.deletionGraceHours, "hour");
   const questions = [
-    { question: "Как подключить VPN?", answer: "Войдите в личный кабинет и пополните баланс. Когда подписка будет готова, откройте ссылку или скопируйте её в приложение, которое поддерживает ссылки подписки." },
-    { question: "Как рассчитывается стоимость?", answer: "Оплата посуточная. Расход зависит от цены за день и выбранного вами лимита устройств. Текущий баланс и примерный остаток времени видны в кабинете." },
-    { question: "Как получить пробный доступ?", answer: "Создайте аккаунт и подтвердите Telegram через бота. После этого в кабинете можно один раз активировать пробный период." },
-    { question: "Что произойдёт, когда баланс закончится?", answer: "VPN-доступ приостановится. Пополните баланс в течение " + settings.deletionGraceHours + " ч, чтобы сохранить подписку." },
+    { question: "Как подключить VPN?", answer: "Создайте аккаунт и пополните баланс. Ссылка для подключения появится в личном кабинете. Добавьте её в VPN-приложение и включите подключение." },
+    { question: "Сколько это стоит?", answer: `От ${dailyPrice} в день за устройство. Сумма зависит от количества устройств. Стоимость и остаток баланса видны в личном кабинете.` },
+    { question: "Можно попробовать бесплатно?", answer: `Да, пробный доступ на ${formatDuration(settings.trialDays, "day")} можно включить один раз. Для этого привяжите Telegram через нашего бота.` },
+    { question: "Что будет, если закончатся деньги?", answer: `VPN временно перестанет работать. Пополните баланс, чтобы подключиться снова. После приостановки есть ${gracePeriod} на пополнение, чтобы сохранить текущую ссылку.` },
   ];
 
   return (
@@ -69,14 +71,14 @@ export default async function HomePage() {
       <main id="main-content">
         <section className="obsidian-wrap hero">
           <div className="hero-copy ui-reveal">
-            <div className="hero-kicker"><ShieldCheck size={18} aria-hidden="true" /> VPN с посуточной оплатой</div>
-            <h1>Твой интернет. <span>Твои правила.</span></h1>
-            <p>Быстрое и удобное подключение к VPN с управлением подпиской в одном личном кабинете.</p>
+            <div className="hero-kicker"><ShieldCheck size={18} aria-hidden="true" /> 1VPN · Оплата по дням</div>
+            <h1>VPN <span>на&nbsp;каждый день</span></h1>
+            <p>Подключайтесь по ссылке, выбирайте количество устройств и пополняйте баланс, когда удобно.</p>
             <div className="hero-actions">
               <ButtonLink href={joinHref} prefetch={false} size="lg">{joinLabel}</ButtonLink>
-              <a href="#benefits" className="ui-button ui-button-ghost ui-button-lg">Узнать больше</a>
+              <a href="#benefits" className="ui-button ui-button-ghost ui-button-lg">Как это работает</a>
             </div>
-            <div className="hero-price">{formatCurrency(settings.pricePerDayKopeks)} в день за устройство</div>
+            <div className="hero-price">От {dailyPrice} в день за устройство</div>
           </div>
           <div className="hero-art ui-reveal ui-delay">
             <OneVpnNetworkLogo eager />
@@ -86,8 +88,8 @@ export default async function HomePage() {
         <section id="benefits" className="site-section">
           <div className="obsidian-wrap">
             <div className="site-section-heading">
-              <h2>VPN под вашим контролем</h2>
-              <p>Подключение, подписка и устройства в одном месте.</p>
+              <h2>Всё необходимое — в одном месте</h2>
+              <p>Подключение, оплата и управление устройствами без лишних сложностей.</p>
             </div>
             <div className="benefits">
               {benefits.map(({ title, description, icon: Icon }) => (
@@ -104,8 +106,8 @@ export default async function HomePage() {
         <section id="pricing" className="site-section">
           <div className="obsidian-wrap">
             <div className="site-section-heading">
-              <h2>Прозрачный тариф</h2>
-              <p>Стоимость зависит от срока использования и лимита устройств.</p>
+              <h2>Сколько стоит</h2>
+              <p>Выберите количество устройств. Оплата списывается с баланса.</p>
             </div>
             <PublicPricing dailyPriceKopeks={settings.pricePerDayKopeks} trialDays={settings.trialDays}
               joinHref={joinHref} joinLabel={joinLabel} />
@@ -116,12 +118,14 @@ export default async function HomePage() {
           <div className="obsidian-wrap faq-grid">
             <div className="site-section-heading">
               <h2>Частые вопросы</h2>
-              <p>Как начать и управлять подпиской.</p>
             </div>
             <div>
               {questions.map(({ question, answer }) => (
                 <details className="faq-item" key={question}>
-                  <summary>{question}<Plus size={19} aria-hidden="true" /></summary>
+                  <summary>{question}
+                    <Plus className="faq-open-icon" size={19} aria-hidden="true" />
+                    <Minus className="faq-close-icon" size={19} aria-hidden="true" />
+                  </summary>
                   <p className="faq-answer">{answer}</p>
                 </details>
               ))}
@@ -135,8 +139,8 @@ export default async function HomePage() {
           <Brand />
           <nav aria-label="Контакты и документы">
             <a href={offerUrl} target="_blank" rel="noreferrer">Публичная оферта</a>
-            <a href={privacyUrl} target="_blank" rel="noreferrer">Конфиденциальность</a>
-            <a href={supportUrl} target="_blank" rel="noreferrer">Поддержка в Telegram</a>
+            <a href={privacyUrl} target="_blank" rel="noreferrer">Политика конфиденциальности</a>
+            <a href={supportUrl} target="_blank" rel="noreferrer">Написать в Telegram</a>
             {env.SUPPORT_EMAIL && <a href={"mailto:" + env.SUPPORT_EMAIL}>{env.SUPPORT_EMAIL}</a>}
           </nav>
         </div>

@@ -19,9 +19,9 @@ export function SiteRestartCard() {
 
   return (
     <Card className="space-y-3">
-      <SectionHeader title="Перезапуск сайта" description="Сайт будет временно недоступен. Страница обновится автоматически после запроса." />
+      <SectionHeader title="Перезапуск сайта" description="Сайт будет недоступен во время перезапуска. Страница обновится автоматически." />
       <form action={action}>
-        <ConfirmSubmit variant="danger" label="Перезапустить" message="Перезапустить весь процесс 1VPN прямо сейчас?">Перезагрузить сайт</ConfirmSubmit>
+        <ConfirmSubmit variant="danger" label="Перезапустить" message="Подтвердите перезапуск 1VPN.">Перезапустить сайт</ConfirmSubmit>
       </form>
       {state.message ? <Notice tone={state.status === "error" ? "danger" : "success"}>{state.message}</Notice> : null}
     </Card>

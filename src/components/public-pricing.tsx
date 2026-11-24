@@ -9,15 +9,15 @@ export function PublicPricing({ dailyPriceKopeks, trialDays, joinHref, joinLabel
   return (
     <div className="pricing-layout">
       <Card className="price-card">
-        <h3>Доступ по балансу</h3>
-        <p className="price-number">{formatCurrency(dailyPriceKopeks)}<span>в сутки</span></p>
-        <p>{formatCurrency(dailyPriceKopeks * PUBLIC_BILLING_MONTH_DAYS)} за {PUBLIC_BILLING_MONTH_DAYS} дней при одном устройстве.</p>
+        <h3>Оплата по дням</h3>
+        <p className="price-number">{formatCurrency(dailyPriceKopeks, 2)}<span>в день за устройство</span></p>
+        <p>Одно устройство на {PUBLIC_BILLING_MONTH_DAYS} дней обойдётся в {formatCurrency(dailyPriceKopeks * PUBLIC_BILLING_MONTH_DAYS, 2)}.</p>
         <ButtonLink href={joinHref}>{joinLabel}</ButtonLink>
       </Card>
       <Card className="price-card">
         <h3>Пробный период</h3>
         <p className="price-number">{trialDays}<span>дн.</span></p>
-        <p>Активируется один раз после подтверждения Telegram через бота.</p>
+        <p>Привяжите Telegram через бота, чтобы один раз попробовать сервис бесплатно.</p>
       </Card>
     </div>
   );

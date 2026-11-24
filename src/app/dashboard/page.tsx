@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import type { VpnProvisionState } from "@prisma/client";
 import { CircleDollarSign, Clock3, Gift, ShieldCheck, Smartphone, Wallet } from "lucide-react";
 import {
   claimTrialAction,
@@ -23,15 +24,32 @@ import { db } from "@/lib/db";
 import { env } from "@/lib/env";
 import { getRemoteUserDevices } from "@/lib/remnawave";
 import { DEFAULT_SUPPORT_TELEGRAM_URL } from "@/lib/site";
-import { formatCurrency, formatDays } from "@/lib/utils";
+import { formatCurrency, formatDays, formatDuration } from "@/lib/utils";
 import { canUseYooKassa } from "@/lib/yookassa";
 
-function subscriptionStatus(balance: number, state: string, banned: boolean) {
-  if (banned) return { label: "Заблокирована", tone: "danger" } as const;
-  if (balance <= 0) return { label: "Ожидает оплаты", tone: "neutral" } as const;
-  if (state === "ACTIVE") return { label: "Активна", tone: "success" } as const;
-  if (state === "ERROR") return { label: "Ошибка панели", tone: "danger" } as const;
-  return { label: "Синхронизация", tone: "warning" } as const;
+function subscriptionStatus(balance: number, state: VpnProvisionState, banned: boolean, hasLink: boolean) {
+  if (banned) {
+    return { label: "Аккаунт заблокирован", tone: "danger", message: "Доступ к VPN приостановлен." } as const;
+  }
+  if (state === "ERROR") {
+    return { label: "Ошибка подключения", tone: "danger", message: "Не удалось подготовить ссылку. Обновите страницу или напишите в поддержку." } as const;
+  }
+  if (balance <= 0) {
+    const label = hasLink ? "Доступ приостановлен" : "Ожидает пополнения";
+    return { label, tone: "neutral", message: "Ссылка появится после оплаты или активации пробного периода." } as const;
+  }
+  switch (state) {
+    case "ACTIVE":
+      return hasLink
+        ? { label: "Подписка активна", tone: "success", message: "" } as const
+        : { label: "Ссылка недоступна", tone: "warning", message: "Ссылка пока недоступна. Напишите в поддержку." } as const;
+    case "DISABLED":
+      return { label: "Доступ приостановлен", tone: "neutral", message: "Доступ приостановлен. Если баланс уже пополнен, напишите в поддержку." } as const;
+    case "DELETED":
+      return { label: "Ссылка удалена", tone: "neutral", message: "Прежняя ссылка удалена. Новую можно будет получить после обновления подписки." } as const;
+    case "PENDING":
+      return { label: "Готовим подключение", tone: "warning", message: "Подготавливаем подключение. Попробуйте обновить страницу чуть позже." } as const;
+  }
 }
 
 async function DeviceList({ remnawaveUserUuid }: { remnawaveUserUuid?: string | null }) {
@@ -39,10 +57,10 @@ async function DeviceList({ remnawaveUserUuid }: { remnawaveUserUuid?: string | 
   try {
     devices = await getRemoteUserDevices(remnawaveUserUuid, AbortSignal.timeout(5_000));
   } catch {
-    return <ErrorState>Панель VPN не ответила. Обновите страницу, чтобы повторить запрос.</ErrorState>;
+    return <ErrorState>Не удалось загрузить устройства. Обновите страницу, чтобы попробовать ещё раз.</ErrorState>;
   }
 
-  if (!devices.length) return <EmptyState>Устройства появятся после подключения через VPN-приложение.</EmptyState>;
+  if (!devices.length) return <EmptyState>Подключённые устройства появятся здесь.</EmptyState>;
 
   return (
     <ul className="grid gap-2">
@@ -50,13 +68,13 @@ async function DeviceList({ remnawaveUserUuid }: { remnawaveUserUuid?: string | 
         <li key={device.hwid} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-black/20 px-3 py-3">
           <div className="min-w-0">
             <p className="font-semibold">{device.deviceModel || device.platform || "Устройство " + device.hwid.slice(0, 8)}</p>
-            <p className="break-all font-mono text-xs text-subtle">HWID {device.hwid}</p>
+            <p className="break-all font-mono text-xs text-subtle">ID устройства {device.hwid}</p>
             <p className="mt-1 text-sm text-muted">Последний вход {device.updatedAt.toLocaleString("ru-RU")}</p>
           </div>
           <form action={deleteOwnHwidDeviceAction}>
             <input type="hidden" name="hwid" value={device.hwid} />
             <ConfirmSubmit size="sm" variant="danger" label="Удалить устройство"
-              message="Устройство будет удалено из списка VPN. При необходимости его можно подключить заново.">Удалить</ConfirmSubmit>
+              message="Устройство исчезнет из списка. Его можно будет подключить заново.">Удалить</ConfirmSubmit>
           </form>
         </li>
       ))}
@@ -97,16 +115,18 @@ export default async function DashboardPage() {
     DEFAULT_SUPPORT_TELEGRAM_URL;
 
 
-  const status = subscriptionStatus(
-    overview.user.balanceKopeks, overview.user.vpnProvisionState, overview.user.isBanned,
-  );
   const subscriptionUrl = overview.user.subscriptionUrl;
+  const status = subscriptionStatus(
+    overview.user.balanceKopeks, overview.user.vpnProvisionState, overview.user.isBanned, Boolean(subscriptionUrl),
+  );
   const dailyPrice = overview.settings.pricePerDayKopeks;
+  const trialDuration = formatDuration(overview.settings.trialDays, "day");
+  const gracePeriod = formatDuration(overview.settings.deletionGraceHours, "hour");
 
   return (
     <ConsoleShell area="dashboard" isAdmin={session.user.role === "ADMIN"}>
-      <PageHeader title="Подписка и баланс" description={
-        <><span>ID {publicId}</span> · {hasRealEmail ? overview.user.email : "Email не привязан"}</>
+      <PageHeader title="Мой VPN" description={
+        <><span>ID {publicId}</span> · {hasRealEmail ? overview.user.email : "Почта не добавлена"}</>
       }>
         <BillingModal paymentsEnabled={canUseYooKassa()} topUpAction={createYooKassaPaymentAction}
           transactions={transactions.map((transaction) => ({
@@ -120,18 +140,18 @@ export default async function DashboardPage() {
       <section className="console-stats" aria-label="Показатели подписки">
         <StatCard label="Баланс" value={formatCurrency(overview.user.balanceKopeks)}
           icon={<Wallet size={19} aria-hidden="true" />} />
-        <StatCard label="Осталось дней" value={formatDays(overview.remainingDays)}
+        <StatCard label="Хватит примерно на" value={formatDays(overview.remainingDays, true)}
           icon={<Clock3 size={19} aria-hidden="true" />} />
-        <StatCard label="Расход в день" value={formatCurrency(dailyPrice * overview.effectiveHwidDeviceLimit)}
+        <StatCard label="Стоимость в день" value={formatCurrency(dailyPrice * overview.effectiveHwidDeviceLimit, 2)}
           icon={<CircleDollarSign size={19} aria-hidden="true" />}>
-          {formatCurrency(dailyPrice)} за устройство
+          {formatCurrency(dailyPrice, 2)} за устройство
         </StatCard>
       </section>
 
       {emailNeedsVerification ? <aside>
         <Notice className="flex-wrap items-center justify-between" tone="warning">
-          <span>{!hasRealEmail ? "Добавьте email для восстановления доступа и уведомлений." : "Подтвердите email кодом из письма."}</span>
-          <ButtonLink href="/dashboard/account#email" size="sm" variant="ghost">Настройки email</ButtonLink>
+          <span>{!hasRealEmail ? "Добавьте почту, чтобы можно было восстановить пароль." : "Введите код из письма, чтобы подтвердить почту."}</span>
+          <ButtonLink href="/dashboard/account#email" size="sm" variant="ghost">Настройки почты</ButtonLink>
         </Notice>
       </aside> : null}
       {overview.user.isBanned ? <aside><ErrorState>Аккаунт заблокирован. VPN-доступ приостановлен.</ErrorState></aside> : null}
@@ -142,7 +162,7 @@ export default async function DashboardPage() {
             <div className="benefit-icon"><ShieldCheck size={23} aria-hidden="true" /></div>
             <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
           </div>
-          <SectionHeader title="Подключение к VPN" description="Ссылка доступа к вашей подписке." />
+          <SectionHeader title="Подключение" description="Ваша ссылка для подключения к VPN." />
           {subscriptionUrl ? (
             <>
               <code className="subscription-link">{subscriptionUrl}</code>
@@ -151,20 +171,20 @@ export default async function DashboardPage() {
                 <CopyButton value={subscriptionUrl} />
               </div>
             </>
-          ) : <EmptyState>Ссылка появится после пополнения или активации пробного периода и синхронизации с VPN-панелью.</EmptyState>}
+          ) : status.tone === "danger" ? <ErrorState>{status.message}</ErrorState> : <EmptyState>{status.message}</EmptyState>}
           <details className="faq-item">
-            <summary>Инструкция по подключению</summary>
+            <summary>Как подключиться</summary>
             <ol className="faq-answer list-decimal space-y-1 pl-5">
-              <li>Откройте VPN-приложение с поддержкой ссылок подписок.</li>
-              <li>Скопируйте вашу ссылку из кабинета и добавьте её в приложение.</li>
-              <li>Выберите доступный сервер в приложении и включите VPN.</li>
+              <li>Откройте VPN-приложение, которое поддерживает ссылки подписок.</li>
+              <li>Скопируйте ссылку из кабинета и добавьте её в приложение.</li>
+              <li>Выберите сервер и включите VPN.</li>
             </ol>
           </details>
         </Card>
 
         <Card id="devices" className="console-section space-y-4">
           <div className="benefit-icon"><Smartphone size={22} aria-hidden="true" /></div>
-          <SectionHeader title="Устройства" description="Управляйте лимитом и удаляйте ненужные устройства." />
+          <SectionHeader title="Мои устройства" description="Выберите, сколько устройств хотите подключить." />
           <DeviceStepperForm action={updateOwnHwidAction} currentValue={overview.effectiveHwidDeviceLimit} />
           <Suspense fallback={<div role="status" className="grid gap-2"><span className="text-sm text-muted">Загружаем устройства…</span><Skeleton className="h-16" /></div>}>
             <DeviceList remnawaveUserUuid={overview.user.remnawaveUserUuid} />
@@ -177,8 +197,11 @@ export default async function DashboardPage() {
           <div className="flex items-start gap-3">
             <span className="benefit-icon shrink-0"><Gift size={21} aria-hidden="true" /></span>
             <div>
-              <h2 className="text-lg font-semibold">Пробный период</h2>
-              <p className="mt-1 text-sm text-muted">{overview.settings.trialDays} дн. доступа после подтверждения Telegram.</p>
+              <h2 className="text-lg font-semibold">Попробовать бесплатно</h2>
+              <p className="mt-1 text-sm text-muted">
+                {hasLinkedTelegram ? `Включите бесплатный доступ на ${trialDuration}.`
+                  : `Привяжите Telegram, чтобы получить пробный доступ на ${trialDuration}.`}
+              </p>
             </div>
           </div>
           {hasLinkedTelegram ? <form action={claimTrialAction}><PendingButton>Активировать пробный период</PendingButton></form>
@@ -188,14 +211,15 @@ export default async function DashboardPage() {
 
       <section id="support" className="console-grid console-section" aria-label="Условия и поддержка">
         <Card>
-          <SectionHeader title="Условия подписки" />
-          <p className="text-muted leading-relaxed">При нулевом балансе доступ приостанавливается. Пополните его в течение {overview.settings.deletionGraceHours} ч, чтобы сохранить ссылку.</p>
+          <SectionHeader title="Как работает оплата" />
+          <p className="text-muted leading-relaxed">Стоимость рассчитывается по дням и зависит от количества устройств. Если баланс закончится, доступ приостановится.</p>
+          <p className="mt-2 text-sm text-muted">На пополнение после приостановки есть {gracePeriod}, чтобы сохранить текущую ссылку.</p>
           <p className="mt-2 text-sm text-subtle">Telegram {overview.user.telegramId ?? "не привязан"}</p>
         </Card>
         <Card>
-          <SectionHeader title="Поддержка" />
+          <SectionHeader title="Нужна помощь?" description="Если возникла проблема с оплатой или подключением, напишите нам." />
           <div className="flex flex-wrap gap-2">
-            {supportTelegramUrl ? <ButtonLink href={supportTelegramUrl} target="_blank" rel="noreferrer" variant="ghost">Telegram</ButtonLink> : null}
+            {supportTelegramUrl ? <ButtonLink href={supportTelegramUrl} target="_blank" rel="noreferrer" variant="ghost">Написать в Telegram</ButtonLink> : null}
             {env.SUPPORT_EMAIL ? <ButtonLink href={"mailto:" + env.SUPPORT_EMAIL} variant="ghost">{env.SUPPORT_EMAIL}</ButtonLink> : null}
           </div>
         </Card>

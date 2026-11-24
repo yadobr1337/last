@@ -10,7 +10,7 @@ import type { RemnawaveConnectionStatus } from "@/lib/remnawave";
 
 const details = {
   connected: { label: "Панель доступна", tone: "success" },
-  error: { label: "Ошибка подключения", tone: "danger" },
+  error: { label: "Не удалось подключиться", tone: "danger" },
   not_configured: { label: "Не настроено", tone: "neutral" },
 } as const;
 
@@ -44,8 +44,8 @@ export function RemnawaveStatusCard({ initialStatus }: { initialStatus: Remnawav
   ];
   return (
     <Card className="space-y-4">
-      <SectionHeader title="Remnawave" description="Состояние подключения к API.">
-        <form action={refreshAction}><PendingButton variant="ghost">Обновить статус</PendingButton></form>
+      <SectionHeader title="Remnawave" description="Связь с VPN-панелью.">
+        <form action={refreshAction}><PendingButton variant="ghost">Проверить подключение</PendingButton></form>
       </SectionHeader>
       <div className="flex flex-wrap items-center gap-2" aria-live="polite">
         <StatusBadge tone={tone}>{label}</StatusBadge>

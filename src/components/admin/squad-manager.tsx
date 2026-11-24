@@ -39,13 +39,13 @@ function SquadRow({ squad }: { squad: SquadItem }) {
           <label className="grid gap-2 text-sm text-muted">UUID Remnawave
             <Input defaultValue={squad.remnawaveInternalSquadUuid ?? ""} name="remnawaveInternalSquadUuid" placeholder="UUID сквада" required />
           </label>
-          <label className="grid gap-2 text-sm text-muted">Лимит мест
+          <label className="grid gap-2 text-sm text-muted">Лимит пользователей
             <Input defaultValue={squad.memberLimit} min="1" name="memberLimit" type="number" required />
           </label>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <CheckField variant="switch" defaultChecked={squad.isActive} name="isActive">Активный сквад</CheckField>
-          <PendingButton variant="ghost" disabled={deletePending}>Обновить</PendingButton>
+          <PendingButton variant="ghost" disabled={deletePending}>Сохранить</PendingButton>
         </div>
       </form>
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-3">
@@ -53,7 +53,7 @@ function SquadRow({ squad }: { squad: SquadItem }) {
         <form action={deleteAction}>
           <input type="hidden" name="squadId" value={squad.id} />
           <ConfirmSubmit variant="danger" disabled={updatePending} label="Удалить сквад"
-            message="Пользователи будут отвязаны от этого сквада. Перераспределение выполнит синхронизация.">Удалить</ConfirmSubmit>
+            message="Пользователи будут исключены из этого сквада и получат другой при синхронизации, если есть свободные места.">Удалить</ConfirmSubmit>
         </form>
       </div>
       <ActionMessage state={updateState} />
@@ -74,7 +74,7 @@ export function SquadManager({ squads }: { squads: SquadItem[] }) {
           <label className="grid gap-2 text-sm text-muted">Название
             <Input name="name" placeholder="Название для админки" />
           </label>
-          <label className="grid gap-2 text-sm text-muted">Лимит мест
+          <label className="grid gap-2 text-sm text-muted">Лимит пользователей
             <Input min="1" name="memberLimit" required type="number" />
           </label>
         </div>
@@ -82,7 +82,7 @@ export function SquadManager({ squads }: { squads: SquadItem[] }) {
         <ActionMessage state={createState} />
       </form>
       {squads.length ? squads.map((squad) => <SquadRow key={squad.id} squad={squad} />)
-        : <EmptyState>Сквады пока не добавлены. Пользователи ожидают свободного сквада.</EmptyState>}
+        : <EmptyState>Сквадов пока нет. Добавьте сквад из Remnawave.</EmptyState>}
     </div>
   );
 }

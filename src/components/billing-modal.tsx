@@ -19,10 +19,9 @@ export function BillingModal({ transactions, paymentsEnabled, topUpAction }: Bil
   return (
     <>
       <Button type="button" onClick={() => setOpen(true)} size="lg">
-        <Plus size={19} aria-hidden="true" /> Пополнить баланс
+        <Plus size={19} aria-hidden="true" /> Пополнить
       </Button>
-      <Modal open={open} onClose={() => setOpen(false)} title="Баланс и пополнения"
-        description="Выберите сумму и способ оплаты. Здесь же доступна история пополнений." layout="wide">
+      <Modal open={open} onClose={() => setOpen(false)} title="Пополнить баланс" layout="wide">
         <div className="grid gap-4 md:grid-cols-[.9fr_1.1fr]">
           <section className="ui-card bg-background" aria-label="Пополнение баланса">
             <h3 className="text-lg font-semibold tracking-tight">Пополнение</h3>
@@ -45,7 +44,7 @@ export function BillingModal({ transactions, paymentsEnabled, topUpAction }: Bil
               {paymentsEnabled ? (
                 <PendingButton className="w-full">Перейти к оплате</PendingButton>
               ) : (
-                <Notice>Онлайн-оплата пока недоступна. Чтобы пополнить баланс, напишите в поддержку.</Notice>
+                <Notice>Онлайн-оплата пока недоступна. Напишите в поддержку, чтобы пополнить баланс.</Notice>
               )}
             </form>
           </section>

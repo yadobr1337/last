@@ -13,13 +13,13 @@ export default async function RegisterPage() {
   if (settings.maintenanceEnabled) return <MaintenanceScreen message={settings.maintenanceMessage} />;
 
   return (
-    <AuthFrame title="Создать аккаунт" description="После регистрации подтвердите email кодом из письма.">
+    <AuthFrame title="Регистрация" description="Зарегистрируйтесь по почте или войдите через Telegram.">
       <RegisterForm captchaEnabled={settings.captchaEnabled} captchaSiteKey={settings.captchaEnabled ? getCaptchaSiteKey() : undefined} />
       <div className="my-6 flex items-center gap-3 text-sm text-muted">
         <span className="h-px flex-1 bg-line" /> Telegram <span className="h-px flex-1 bg-line" />
       </div>
       <TelegramLogin mode="login" />
-      <p className="mt-3 text-sm text-muted">Для активации пробного периода запустите бота после входа.</p>
+      <p className="mt-3 text-sm text-muted">После входа запустите бота, чтобы открыть пробный доступ.</p>
     </AuthFrame>
   );
 }

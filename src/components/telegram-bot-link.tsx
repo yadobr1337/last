@@ -25,7 +25,9 @@ export function TelegramBotLink() {
       const payload = (await response.json()) as LinkResponse;
 
       if (!response.ok || !payload.url) {
-        setError(payload.error ?? "Не удалось создать ссылку привязки Telegram.");
+        setError(response.status === 503 ? "Бот Telegram сейчас недоступен. Попробуйте позже."
+          : response.status === 401 ? "Войдите в аккаунт, чтобы привязать Telegram."
+            : payload.error ?? "Не удалось открыть бота. Попробуйте ещё раз.");
         return;
       }
 
@@ -41,15 +43,15 @@ export function TelegramBotLink() {
     <div className="space-y-3">
       <div className="flex flex-wrap gap-3">
         <Button type="button" onClick={startLinking} disabled={pending}>
-          {pending ? "Открываем Telegram..." : "Подтвердить через @VPNthe1_bot"}
+          {pending ? "Открываем Telegram…" : "Открыть бота"}
         </Button>
         <Button type="button" variant="ghost" onClick={() => router.refresh()}>
           Проверить привязку
         </Button>
       </div>
       <p className="text-sm leading-6 text-zinc-400">
-        В Telegram нажмите Start. После подтверждения станут доступны бесплатный день и уведомления.
-        Одноразовая ссылка действует 15 минут.
+        Откройте бота и нажмите Start. После подтверждения станут доступны пробный период и уведомления.
+        Ссылка действует 15 минут.
       </p>
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
     </div>

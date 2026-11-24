@@ -31,7 +31,7 @@ function getVpnStatusLabel(params: {
   vpnProvisionState: VpnProvisionState;
 }) {
   if (params.isBanned) {
-    return "Заблокирован";
+    return "Доступ заблокирован";
   }
 
   if (params.balanceKopeks <= 0) {
@@ -39,7 +39,7 @@ function getVpnStatusLabel(params: {
   }
 
   if (params.vpnProvisionState === VpnProvisionState.ACTIVE) {
-    return "Активный";
+    return "Подписка активна";
   }
 
   if (params.vpnProvisionState === VpnProvisionState.ERROR) {
@@ -49,14 +49,21 @@ function getVpnStatusLabel(params: {
   return "Синхронизация";
 }
 
+const paymentStatusLabels: Record<string, string> = {
+  PENDING: "Ожидает оплаты",
+  WAITING_FOR_CAPTURE: "Ожидает подтверждения",
+  SUCCEEDED: "Оплачен",
+  CANCELED: "Отменён",
+};
+
 function getTransactionLabel(type: TransactionType) {
   switch (type) {
     case TransactionType.TOPUP:
       return "Пополнение";
     case TransactionType.ADMIN_ADJUSTMENT:
-      return "Ручное изменение";
+      return "Корректировка баланса";
     case TransactionType.TRIAL:
-      return "Пробный день";
+      return "Пробный период";
     case TransactionType.BILLING_DEBIT:
       return "Списание";
     default:
@@ -201,11 +208,11 @@ export default async function AdminPage({
       ? searchedUser.balanceKopeks / (settings.pricePerDayKopeks * deviceCount) : 0;
     user = {
       id: searchedUser.id,
-      publicId: searchedUser.publicId ?? "ожидается",
+      publicId: searchedUser.publicId ?? "ещё не присвоен",
       email: searchedUser.email,
       squadName: searchedUser.squad?.name ?? "не назначен",
       remnawaveUserUuid: searchedUser.remnawaveUserUuid ?? "ещё не создан",
-      subscriptionUrl: searchedUser.subscriptionUrl ?? "Ссылка подписки ещё не сгенерирована",
+      subscriptionUrl: searchedUser.subscriptionUrl ?? "Ссылка подписки ещё не создана",
       balance: formatCurrency(searchedUser.balanceKopeks),
       remainingDays: formatDays(remainingDays),
       deviceCount,
@@ -228,7 +235,7 @@ export default async function AdminPage({
 
   return (
     <ConsoleShell area="admin" isAdmin>
-      <PageHeader title="Управление 1VPN" description="Пользователи, подписки и инфраструктура сервиса.">
+      <PageHeader title="Управление 1VPN" description="Пользователи, подписки, платежи и серверы.">
         <form action={runSyncNowAction}>
           <PendingButton variant="ghost"><Activity size={17} aria-hidden="true" />Запустить синхронизацию</PendingButton>
         </form>
@@ -263,26 +270,29 @@ export default async function AdminPage({
             </label>
             <Button type="submit"><Search size={17} aria-hidden="true" />Найти пользователя</Button>
           </form>
-          {user ? <UserManagerModal key={user.id} user={user} /> : normalizedQuery ? <EmptyState>Пользователь не найден.</EmptyState> : null}
+          {user ? <UserManagerModal key={user.id} user={user} /> : normalizedQuery ? <EmptyState>Пользователь не найден. Проверьте адрес или ID.</EmptyState> : null}
         </Card>
       </section>
 
       <section id="finance" className="console-section space-y-3">
         <Card>
-          <SectionHeader title="Платежи" description="Последние заказы пополнения." />
-          <DataTable label="Платежи" columns={["Заказ", "Способ", "Сумма", "Статус", "Создан"]}
+          <SectionHeader title="Платежи" description="Последние операции пополнения баланса." />
+          <DataTable label="Платежи" columns={["Заказ", "Способ", "Сумма", "Статус", "Дата создания"]}
             empty="Платежей пока нет." filterLabel="Статус"
-            rows={payments.map((payment) => ({
-              id: payment.id,
-              group: payment.status,
-              cells: [
-                <code key="id" className="text-xs text-muted">{payment.id}</code>,
-                payment.method === "sbp" ? "СБП" : payment.method === "bank_card" ? "Карта" : payment.method,
-                formatCurrency(payment.amountKopeks),
-                <StatusBadge key="status" tone={payment.status === "SUCCEEDED" ? "success" : payment.status === "CANCELED" ? "danger" : "neutral"}>{payment.status}</StatusBadge>,
-                payment.createdAt.toLocaleString("ru-RU", { timeZone: "Europe/Moscow" }),
-              ],
-            }))} />
+            rows={payments.map((payment) => {
+              const statusLabel = paymentStatusLabels[payment.status] ?? payment.status;
+              return {
+                id: payment.id,
+                group: statusLabel,
+                cells: [
+                  <code key="id" className="text-xs text-muted">{payment.id}</code>,
+                  payment.method === "sbp" ? "СБП" : payment.method === "bank_card" ? "Карта" : payment.method,
+                  formatCurrency(payment.amountKopeks),
+                  <StatusBadge key="status" tone={payment.status === "SUCCEEDED" ? "success" : payment.status === "CANCELED" ? "danger" : "neutral"}>{statusLabel}</StatusBadge>,
+                  payment.createdAt.toLocaleString("ru-RU", { timeZone: "Europe/Moscow" }),
+                ],
+              };
+            })} />
         </Card>
         <Card>
           <SectionHeader title="Настройки" description="Тариф, пробный период и параметры сайта.">
@@ -301,7 +311,7 @@ export default async function AdminPage({
                   <label className="grid gap-2 text-sm text-muted">Устройства по умолчанию
                     <Input defaultValue={settings.defaultHwidDeviceLimit} name="defaultHwidDeviceLimit" type="number" required />
                   </label>
-                  <label className="grid gap-2 text-sm text-muted">Окно сохранения ссылки, ч
+                  <label className="grid gap-2 text-sm text-muted">Срок сохранения ссылки, ч
                     <Input defaultValue={settings.deletionGraceHours} name="deletionGraceHours" readOnly type="number" />
                   </label>
                 </div>
@@ -311,7 +321,7 @@ export default async function AdminPage({
                   <label className="grid gap-2 text-sm text-muted">Ссылка на поддержку Telegram
                     <Input defaultValue={settings.supportTelegramUrl ?? ""} name="supportTelegramUrl" type="url" />
                   </label>
-                  <label className="grid gap-2 text-sm text-muted">Анонс главной
+                  <label className="grid gap-2 text-sm text-muted">Объявление на главной
                     <Input defaultValue={settings.heroAnnouncement ?? ""} name="heroAnnouncement" type="text" />
                   </label>
                   <CheckField variant="switch" name="captchaEnabled" defaultChecked={settings.captchaEnabled}
@@ -328,7 +338,7 @@ export default async function AdminPage({
       <section id="vpn" className="console-section space-y-3">
         <RemnawaveStatusCard initialStatus={remnawaveStatus} />
         <Card>
-          <SectionHeader title="Сквады" description="Добавьте UUID из Remnawave и задайте вместимость сквада." />
+          <SectionHeader title="Сквады" description="Укажите UUID сквада в Remnawave и лимит пользователей." />
           <SquadManager squads={squads.map((squad) => ({
             id: squad.id, name: squad.name, memberLimit: squad.memberLimit, isActive: squad.isActive,
             remnawaveInternalSquadUuid: squad.remnawaveInternalSquadUuid, userCount: squad._count.users,
@@ -338,16 +348,16 @@ export default async function AdminPage({
 
       <section id="nodes" className="console-section">
         <Card className="space-y-4">
-          <SectionHeader title="Серверы и ноды" description="Закупка VPS в Aeza, DNS в Timeweb и настройка в Remnawave." />
+          <SectionHeader title="Серверы и ноды" description="Автоматическая закупка в Aeza, настройка DNS в Timeweb и добавление нод в Remnawave." />
           <div className="flex flex-wrap gap-2">
             <StatusBadge tone={provisioning.config.enabled ? "success" : "neutral"}>{provisioning.config.enabled ? "Включено" : "Выключено"}</StatusBadge>
-            <StatusBadge tone={provisioning.config.dryRun ? "neutral" : "warning"}>{provisioning.config.dryRun ? "Dry run" : "Платный режим"}</StatusBadge>
-            <span className="ui-badge">Локации {provisioning.config.targets.length}</span>
+            <StatusBadge tone={provisioning.config.dryRun ? "neutral" : "warning"}>{provisioning.config.dryRun ? "Dry run" : "Платная закупка"}</StatusBadge>
+            <span className="ui-badge">Регионов {provisioning.config.targets.length}</span>
             <span className="ui-badge">Нод на сквад {provisioning.config.nodesPerSquad}</span>
             <span className="ui-badge">Лимит сквадов {Math.floor(provisioning.config.maxServers / provisioning.config.nodesPerSquad)}</span>
             <span className="ui-badge">Лимит серверов {provisioning.config.maxServers}</span>
           </div>
-          {provisioning.missing.length ? <Notice tone="warning">Заполните параметры закупки {provisioning.missing.join(", ")}</Notice> : null}
+          {provisioning.missing.length ? <Notice tone="warning">Для запуска заполните на сервере {provisioning.missing.join(", ")}.</Notice> : null}
           <form action={runProvisioningNowAction} className="grid justify-items-start gap-3">
             {provisioning.config.enabled && !provisioning.config.dryRun ? (
               <CheckField name="confirmPaidProvisioning" required>Подтверждаю возможную покупку VPS</CheckField>
@@ -377,7 +387,7 @@ export default async function AdminPage({
           <SectionHeader title="Уведомления" description="Состояние доставки сообщений Telegram." />
           <div className="flex flex-wrap gap-2">
             <StatusBadge>{queuedNotifications} в очереди</StatusBadge>
-            <StatusBadge tone={failedNotifications ? "danger" : "neutral"}>{failedNotifications} ошибок доставки</StatusBadge>
+            <StatusBadge tone={failedNotifications ? "danger" : "neutral"}>Ошибок доставки {failedNotifications}</StatusBadge>
           </div>
         </Card>
         <AdminOperations maintenanceEnabled={settings.maintenanceEnabled} maintenanceMessage={settings.maintenanceMessage} />
@@ -385,8 +395,8 @@ export default async function AdminPage({
 
       <section id="journal" className="console-section">
         <Card>
-          <SectionHeader title="Журнал операций" description="Последние административные действия." />
-          <DataTable label="Журнал операций" columns={["Дата", "Действие", "Исполнитель", "Объект"]}
+          <SectionHeader title="Журнал событий" description="Последние действия администраторов." />
+          <DataTable label="Журнал событий" columns={["Дата", "Действие", "Исполнитель", "Объект"]}
             empty="Записей журнала пока нет." pageSize={6} rows={auditEvents.map((event) => ({
               id: event.id,
               cells: [

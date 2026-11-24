@@ -23,16 +23,16 @@ export function ConsoleShell({ area, isAdmin, children }: {
     { href: "#users", label: "Пользователи", icon: Users },
     { href: "#finance", label: "Финансы и тарифы", icon: Wallet },
     { href: "#vpn", label: "Remnawave и сквады", icon: Cable },
-    { href: "#nodes", label: "Серверы и ноды", icon: Server },
+    { href: "#nodes", label: "Серверы", icon: Server },
     { href: "#notifications", label: "Уведомления", icon: Bell },
-    { href: "#journal", label: "Журнал", icon: ClipboardList },
+    { href: "#journal", label: "Журнал событий", icon: ClipboardList },
     { href: "#maintenance", label: "Обслуживание", icon: Settings },
   ] : area === "dashboard" ? [
     { href: "#connection", label: "Подключение", icon: Cable },
     { href: "#devices", label: "Устройства", icon: Smartphone },
     { href: "#support", label: "Поддержка", icon: Bell },
   ] : [
-    { href: "#email", label: "Email", icon: CircleUserRound },
+    { href: "#email", label: "Электронная почта", icon: CircleUserRound },
     { href: "#password", label: "Пароль", icon: ShieldCheck },
     { href: "#telegram", label: "Telegram", icon: Bell },
   ];
@@ -72,7 +72,7 @@ export function ConsoleShell({ area, isAdmin, children }: {
           aria-current={current ? "page" : undefined}>{label}</Link>)}
       </nav>
       <main className="console-content ui-reveal">
-        <div className="console-breadcrumb">{area === "admin" ? "Консоль управления" : "Личный кабинет"}</div>
+        <div className="console-breadcrumb">{area === "admin" ? "Администрирование" : "Личный кабинет"}</div>
         {children}
       </main>
     </div>

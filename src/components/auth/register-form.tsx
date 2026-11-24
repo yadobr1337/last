@@ -33,7 +33,7 @@ export function RegisterForm({ captchaEnabled, captchaSiteKey }: { captchaEnable
         const form = event.currentTarget;
 
         if (captchaEnabled && !captchaToken) {
-          setError(captchaUnavailable ? "Регистрация временно недоступна." : "Пройдите SmartCaptcha перед регистрацией.");
+          setError(captchaUnavailable ? "Проверка регистрации пока недоступна." : "Пройдите проверку SmartCaptcha.");
           return;
         }
 
@@ -54,7 +54,8 @@ export function RegisterForm({ captchaEnabled, captchaSiteKey }: { captchaEnable
 
           const payload = (await response?.json().catch(() => null)) as { ok?: boolean; error?: string; emailCodeSent?: boolean } | null | undefined;
           if (!response?.ok || !payload?.ok) {
-            setError(payload?.error ?? "Не удалось создать аккаунт.");
+            setError(response?.status === 409 ? "Эта почта уже зарегистрирована. Войдите в аккаунт."
+              : payload?.error ?? "Не удалось зарегистрироваться. Попробуйте ещё раз.");
             resetCaptcha();
             return;
           }
@@ -73,8 +74,8 @@ export function RegisterForm({ captchaEnabled, captchaSiteKey }: { captchaEnable
 
           setMessage(
             payload.emailCodeSent
-              ? "Аккаунт создан. Код подтверждения email уже отправлен."
-              : "Аккаунт создан. Подтверждение email можно будет выполнить позже.",
+              ? "Аккаунт создан. Код подтверждения отправлен на почту."
+              : "Аккаунт создан. Почту можно подтвердить позже в настройках.",
           );
           router.replace("/dashboard");
           router.refresh();
@@ -82,7 +83,7 @@ export function RegisterForm({ captchaEnabled, captchaSiteKey }: { captchaEnable
       }}
     >
       <div className="space-y-2">
-        <label htmlFor="register-email" className="text-sm text-muted">Email</label>
+        <label htmlFor="register-email" className="text-sm text-muted">Электронная почта</label>
         <Input id="register-email" name="email" type="email" autoComplete="email" placeholder="you@domain.com" required />
       </div>
       <div className="space-y-2">
@@ -96,7 +97,7 @@ export function RegisterForm({ captchaEnabled, captchaSiteKey }: { captchaEnable
       {message ? <Notice tone="success">{message}</Notice> : null}
       {error ? <Notice tone="danger">{error}</Notice> : null}
       <Button className="w-full" disabled={pending || captchaUnavailable} aria-busy={pending}>
-        {pending ? "Создание..." : "Создать аккаунт"}
+        {pending ? "Регистрируем…" : "Зарегистрироваться"}
       </Button>
 
       <p className="text-sm text-zinc-400">

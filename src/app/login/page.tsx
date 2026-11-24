@@ -8,7 +8,7 @@ export default async function LoginPage() {
   if (session?.user) redirect("/dashboard");
 
   return (
-    <AuthFrame title="Войти в 1VPN" description="Используйте email и пароль или войдите через Telegram.">
+    <AuthFrame title="Вход в 1VPN" description="Войдите по почте и паролю или через Telegram.">
       <LoginForm />
     </AuthFrame>
   );

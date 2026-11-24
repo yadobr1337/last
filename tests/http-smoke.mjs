@@ -96,6 +96,9 @@ try {
   }
   assert.ok(ready, output);
   assert.equal((await request("/")).status, 200);
+  const notFound = await request("/missing-screen-for-copy-test");
+  assert.equal(notFound.status, 404);
+  assert.match(await notFound.text(), /Страница не найдена/);
   assert.equal((await request("/api/cron/process", { method: "POST" })).status, 401);
   assert.match((await request("/admin")).headers.get("location"), /\/login$/);
 
@@ -126,7 +129,21 @@ try {
     method: "POST", body: JSON.stringify({ email: "new@example.test", password }),
   });
   assert.equal(registered.status, 200, await registered.text());
-  assert.equal((await request("/dashboard", { headers: { cookie: await login("new@example.test") } })).status, 200);
+  const freshUserHeaders = { cookie: await login("new@example.test") };
+  const pendingPayment = await request("/dashboard", { headers: freshUserHeaders });
+  assert.equal(pendingPayment.status, 200);
+  assert.match(await pendingPayment.text(), /Ссылка появится после оплаты или активации пробного периода/);
+  await prisma.user.update({
+    where: { email: "new@example.test" },
+    data: { balanceKopeks: 90000, vpnProvisionState: "PENDING", lastBillingAt: new Date() },
+  });
+  assert.match(await (await request("/dashboard", { headers: freshUserHeaders })).text(), /Подготавливаем подключение/);
+  await prisma.user.update({
+    where: { email: "new@example.test" }, data: { vpnProvisionState: "ERROR" },
+  });
+  const failedProvisioning = await (await request("/dashboard", { headers: freshUserHeaders })).text();
+  assert.match(failedProvisioning, /Не удалось подготовить ссылку/);
+  assert.doesNotMatch(failedProvisioning, /Подготавливаем подключение/);
   const reset = await request("/api/auth/password-reset/request", {
     method: "POST", body: JSON.stringify({ email: "unknown@example.test" }),
   });
@@ -144,10 +161,11 @@ try {
     const gift = await prisma.balanceTransaction.findFirst({
       where: { userId: user.id, description: "Obsidian QA gift", type: "ADMIN_ADJUSTMENT" },
     });
-    assert.equal(gift?.amountKopeks, 10600, "Gift days use the saved tariff and device limit");
+    assert.equal(gift?.amountKopeks, 10700, "Gift days use the saved tariff and device limit");
     const settings = await prisma.systemSettings.findUniqueOrThrow({ where: { id: "default" } });
     assert.equal(settings.maintenanceEnabled, true);
     assert.match(await (await request("/")).text(), /Obsidian QA maintenance/);
+    assert.equal((await request("/maintenance")).status, 200);
     assert.equal((await request("/admin", { headers: { cookie: await login(browserAdmin) } })).status, 200);
   }
 } catch (error) {

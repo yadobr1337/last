@@ -38,7 +38,7 @@ export function LoginForm() {
               });
 
               if (!result?.ok || result.error) {
-                setError("Неверный email или пароль.");
+                setError("Проверьте почту и пароль, затем попробуйте ещё раз.");
                 return;
               }
 
@@ -48,7 +48,7 @@ export function LoginForm() {
           }}
         >
           <div className="space-y-2">
-            <label htmlFor="login-email" className="text-sm text-muted">Email</label>
+            <label htmlFor="login-email" className="text-sm text-muted">Электронная почта</label>
             <Input id="login-email" name="email" type="email" autoComplete="username" placeholder="you@domain.com" required />
           </div>
           <div className="space-y-2">
@@ -96,17 +96,23 @@ export function LoginForm() {
 
               const payload = (await response.json()) as { error?: string };
               if (!response.ok) {
-                setError(payload.error ?? "Не удалось обновить пароль.");
+                setError(payload.error === "Неверный или просроченный код."
+                  ? "Код неверный или уже истёк. Запросите новый."
+                  : payload.error ?? "Не удалось сохранить пароль. Попробуйте ещё раз.");
                 return;
               }
 
-              setMessage("Пароль обновлен. Теперь можно войти с новым паролем.");
+              setMessage("Пароль обновлён. Войдите с новым паролем.");
               form.reset();
             });
           }}
         >
+          <div className="space-y-1">
+            <h2 className="text-lg font-semibold">Восстановление пароля</h2>
+            <p className="text-sm text-muted">Получите код на подтверждённую почту и задайте новый пароль.</p>
+          </div>
           <div className="space-y-2">
-            <label htmlFor="reset-email" className="text-sm text-muted">Email</label>
+            <label htmlFor="reset-email" className="text-sm text-muted">Электронная почта</label>
             <Input id="reset-email" name="email" type="email" autoComplete="email" placeholder="you@domain.com" required />
           </div>
           <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
@@ -125,7 +131,7 @@ export function LoginForm() {
                 const formData = new FormData(form);
                 const email = String(formData.get("email") ?? "").trim();
                 if (!email) {
-                  setError("Введите email, чтобы получить код.");
+                  setError("Введите адрес почты, чтобы получить код.");
                   return;
                 }
 
@@ -146,7 +152,7 @@ export function LoginForm() {
                     return;
                   }
 
-                  setMessage("Если email подтверждён, на него придёт письмо с кодом.");
+                  setMessage("Если почта подтверждена в аккаунте, на неё придёт код.");
                 });
               }}
               className="sm:self-end"
@@ -169,10 +175,10 @@ export function LoginForm() {
             }}
             className="text-sm text-zinc-400 transition hover:text-white"
           >
-            Назад ко входу
+            Вернуться ко входу
           </button>
           <Button className="w-full" disabled={pending}>
-            {pending ? "Сохранение..." : "Сбросить пароль"}
+            {pending ? "Сохраняем…" : "Сохранить пароль"}
           </Button>
         </form>
       )}

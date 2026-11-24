@@ -17,6 +17,13 @@ type TelegramLoginProps = {
   onLinked?: () => void;
 };
 
+function telegramErrorMessage(error?: string | null) {
+  if (error === "Telegram bot token is not configured.") return "Вход через Telegram пока недоступен.";
+  if (error === "Telegram auth payload is expired.") return "Подтверждение истекло. Войдите через Telegram ещё раз.";
+  if (error === "Telegram auth hash is invalid.") return "Не удалось проверить подтверждение Telegram. Попробуйте ещё раз.";
+  return "Не удалось войти через Telegram. Попробуйте ещё раз.";
+}
+
 export function TelegramLogin({ mode = "login", onLinked }: TelegramLoginProps) {
   const router = useRouter();
   const botUsername = publicEnv.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME?.trim().replace(/^@/, "");
@@ -48,7 +55,7 @@ export function TelegramLogin({ mode = "login", onLinked }: TelegramLoginProps) 
           return;
         }
 
-        setSuccess("Telegram успешно привязан.");
+        setSuccess("Telegram привязан.");
         router.refresh();
         onLinked?.();
         return;
@@ -61,7 +68,7 @@ export function TelegramLogin({ mode = "login", onLinked }: TelegramLoginProps) 
       }).catch(() => null);
 
       if (!result?.ok || result.error) {
-        setError(result?.error ?? "Не удалось войти через Telegram.");
+        setError(telegramErrorMessage(result?.error));
         return;
       }
 
@@ -72,7 +79,7 @@ export function TelegramLogin({ mode = "login", onLinked }: TelegramLoginProps) 
     const script = document.createElement("script");
     script.src = "https://telegram.org/js/telegram-widget.js?22";
     script.async = true;
-    script.onerror = () => setError("Виджет Telegram не удалось загрузить. Обновите страницу и попробуйте снова.");
+    script.onerror = () => setError("Не удалось загрузить вход через Telegram. Обновите страницу.");
     script.setAttribute("data-telegram-login", botUsername);
     script.setAttribute("data-size", "large");
     script.setAttribute("data-radius", "999");
