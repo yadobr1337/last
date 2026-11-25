@@ -1,4 +1,5 @@
 import { env } from "@/lib/env";
+import { postTelegramWithCurl } from "@/lib/telegram-http";
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
@@ -175,27 +176,42 @@ export function escapeTelegramHtml(value: string) {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
+function postTelegram(
+  token: string,
+  method: "sendMessage" | "sendPhoto",
+  body: string | FormData,
+  timeoutMs: number,
+) {
+  if (env.TELEGRAM_USE_CURL_IPV4 === "true") {
+    return postTelegramWithCurl(token, method, body, timeoutMs);
+  }
+
+  return fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: "POST",
+    headers: typeof body === "string" ? { "Content-Type": "application/json" } : undefined,
+    body,
+    cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+}
+
 export async function sendTelegramMessage(chatId: string, text: string) {
   if (!env.TELEGRAM_BOT_TOKEN) {
     return { ok: false, error: "Telegram bot token is not configured." } as const;
   }
 
   try {
-    const response = await fetch(
-      `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: decorateTelegramMessage(text),
-          parse_mode: "HTML",
-          disable_web_page_preview: true,
-          reply_markup: buildReplyMarkup(),
-        }),
-        cache: "no-store",
-        signal: AbortSignal.timeout(10_000),
-      },
+    const response = await postTelegram(
+      env.TELEGRAM_BOT_TOKEN,
+      "sendMessage",
+      JSON.stringify({
+        chat_id: chatId,
+        text: decorateTelegramMessage(text),
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+        reply_markup: buildReplyMarkup(),
+      }),
+      10_000,
     );
 
     if (!response.ok) {
@@ -228,15 +244,7 @@ export async function sendTelegramPhoto(chatId: string, text: string, photo: Fil
       body.set("reply_markup", JSON.stringify(replyMarkup));
     }
 
-    const response = await fetch(
-      `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`,
-      {
-        method: "POST",
-        body,
-        cache: "no-store",
-        signal: AbortSignal.timeout(20_000),
-      },
-    );
+    const response = await postTelegram(env.TELEGRAM_BOT_TOKEN, "sendPhoto", body, 20_000);
 
     if (!response.ok) {
       return { ok: false, error: `Telegram HTTP ${response.status}`, status: response.status } as const;

@@ -321,50 +321,19 @@ after changing `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME`. The website widget uses sign
 Telegram login data. The webhook below handles bot messages, account linking,
 and trial activation.
 
-After HTTPS works, register the webhook on the new VPS:
+After HTTPS works, register the webhook on the new VPS. This command uses
+`curl` over IPv4 and checks the bot username and existing webhook before
+registering the site's URL.
 
 ```bash
-sudo -u site1vpn bash -lc '
-  cd /var/www/site1vpn
-  set -a
-  source .env
-  set +a
-  curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
-    --data-urlencode "url=${NEXTAUTH_URL}/api/telegram/webhook" \
-    --data-urlencode "secret_token=${TELEGRAM_WEBHOOK_SECRET}" \
-    --data-urlencode "drop_pending_updates=true"
-'
+cd /var/www/site1vpn
+sudo -u site1vpn -H node --env-file=.env --import tsx deploy/setup-telegram-webhook.ts
 ```
 
-Important: use `${TELEGRAM_BOT_TOKEN}` exactly. Do not put the token itself
-inside `${...}`.
-
-The response must contain `"ok":true`. Check the result:
-
-```bash
-sudo -u site1vpn bash -lc '
-  cd /var/www/site1vpn
-  set -a
-  source .env
-  set +a
-  curl -fsS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
-'
-```
-
-Expected fields:
-
-```json
-{
-  "ok": true,
-  "result": {
-    "url": "https://the1vpn.ru/api/telegram/webhook",
-    "pending_update_count": 0
-  }
-}
-```
-
-`last_error_message` should be absent. Test linking from the account settings
-and send `/start` to the bot.
+If Node.js requests to Telegram time out while `curl -4` reaches Telegram,
+set `TELEGRAM_USE_CURL_IPV4="true"` in `.env` and restart `site1vpn`. This
+uses the same IPv4 transport for outgoing bot messages and photos. Test
+`/start` and open a new linking request from the account settings.
 
 ## 11. Enable Yandex SmartCaptcha
 
