@@ -37,6 +37,7 @@ import {
 import { createSquad, deleteSquad, updateSquad } from "@/lib/squads";
 import { resolveUserIdentifier } from "@/lib/user-identity";
 import { SUBSCRIPTION_DELETION_GRACE_HOURS } from "@/lib/site";
+import { smtpFailure } from "@/lib/smtp-transport";
 import { TELEGRAM_ANNOUNCEMENT_MAX_LENGTH } from "@/lib/telegram-templates";
 import { runProvisioningSweep } from "@/lib/provisioning";
 import { getProvisioningConfig } from "@/lib/provisioning-capacity";
@@ -84,72 +85,8 @@ function parseOptionalString(value: FormDataEntryValue | null) {
   return parsed || null;
 }
 
-function redirectByMailError(error: unknown) {
-  const message = error instanceof Error ? error.message : "";
-  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
-
-  if (message.includes("SMTP is not configured")) {
-    redirect("/dashboard/account?emailStatus=smtp_missing");
-  }
-
-  console.error("[email-verification] failed to send code", error);
-
-  if (
-    code.includes("ETIMEDOUT") ||
-    code.includes("ESOCKET") ||
-    code.includes("ECONNECTION") ||
-    message.toLowerCase().includes("timeout") ||
-    message.toLowerCase().includes("timed out") ||
-    message.toLowerCase().includes("greeting never received") ||
-    message.toLowerCase().includes("connection")
-  ) {
-    redirect("/dashboard/account?emailStatus=smtp_connection_error");
-  }
-
-  if (
-    message.includes("Invalid login") ||
-    message.includes("535") ||
-    message.includes("Username and Password not accepted") ||
-    message.toLowerCase().includes("auth")
-  ) {
-    redirect("/dashboard/account?emailStatus=smtp_auth_error");
-  }
-
-  redirect("/dashboard/account?emailStatus=send_error");
-}
-
-function redirectByPasswordMailError(error: unknown) {
-  const message = error instanceof Error ? error.message : "";
-  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
-
-  if (message.includes("SMTP is not configured")) {
-    redirect("/dashboard/account?passwordStatus=smtp_missing");
-  }
-
-  console.error("[password-change] failed to send code", error);
-
-  if (
-    code.includes("ETIMEDOUT") ||
-    code.includes("ESOCKET") ||
-    code.includes("ECONNECTION") ||
-    message.toLowerCase().includes("timeout") ||
-    message.toLowerCase().includes("timed out") ||
-    message.toLowerCase().includes("greeting never received") ||
-    message.toLowerCase().includes("connection")
-  ) {
-    redirect("/dashboard/account?passwordStatus=smtp_connection_error");
-  }
-
-  if (
-    message.includes("Invalid login") ||
-    message.includes("535") ||
-    message.includes("Username and Password not accepted") ||
-    message.toLowerCase().includes("auth")
-  ) {
-    redirect("/dashboard/account?passwordStatus=smtp_auth_error");
-  }
-
-  redirect("/dashboard/account?passwordStatus=send_error");
+function redirectByMailError(error: unknown, field: "emailStatus" | "passwordStatus" = "emailStatus") {
+  redirect(`/dashboard/account?${field}=${smtpFailure(error).status}`);
 }
 
 export async function topUpBalanceAction(formData: FormData) {
@@ -691,7 +628,7 @@ export async function sendOwnPasswordChangeCodeAction() {
       description: "Введите этот код в личном кабинете и задайте новый пароль.",
     });
   } catch (error) {
-    redirectByPasswordMailError(error);
+    redirectByMailError(error, "passwordStatus");
   }
 
   revalidatePath("/dashboard/account");

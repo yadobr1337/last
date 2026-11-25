@@ -149,6 +149,36 @@ build.
 `NEXT_PUBLIC_*` values are embedded during `npm run build`, so rebuild after
 changing them.
 
+### Yandex Mail for account codes
+
+In Yandex Mail's **Email clients** settings, enable IMAP access and
+**App passwords and OAuth tokens**. Create an app password with the `Mail`
+type and use the full mailbox address for both the login and sender.
+[Yandex Mail setup](https://yandex.ru/support/yandex-360/customers/mail/ru/mail-clients/others)
+
+```dotenv
+SMTP_HOST="smtp.yandex.ru"
+SMTP_CONNECT_HOST=""
+SMTP_IP_FAMILY="4"
+SMTP_PORT="465"
+SMTP_SECURE="true"
+SMTP_USER="your-mailbox@yandex.ru"
+SMTP_PASS="mail-app-password"
+SMTP_FROM_EMAIL="your-mailbox@yandex.ru"
+SMTP_FROM_NAME="1VPN"
+```
+
+For port 587 use `SMTP_SECURE="false"`. The Yandex transport requires STARTTLS
+on that port. Run this from `/var/www/site1vpn` to check TLS and SMTP authentication:
+
+```bash
+sudo -u site1vpn -H node --env-file=.env --import tsx deploy/check-smtp.ts
+```
+
+Add `--send-test` to send one message to the configured sender mailbox and
+check that the server accepts it. Restart `site1vpn` after editing SMTP
+variables and request a new code in the account to verify the website flow.
+
 ## 5. Build and Initialize
 
 For a migration with the old production database, do not run `prisma:seed`

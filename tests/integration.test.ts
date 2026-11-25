@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import childProcess, { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -15,13 +17,14 @@ import { authOptions } from "@/lib/auth";
 import { adjustBalanceByAdmin, changeBillingSettings, changeDeviceLimit, creditBalance, grantDaysToAllUsers, runLifecycleSweep,
   setBanState, settleUserBilling, syncUserLifecycle, topUpBalance } from "@/lib/billing";
 import { db, writeTransaction } from "@/lib/db";
-import { consumeEmailCode } from "@/lib/email-codes";
+import { consumeEmailCode, issueEmailCode } from "@/lib/email-codes";
 import { env } from "@/lib/env";
 import { parseRubleAmount } from "@/lib/money";
 import { broadcastTelegramMessage, notifyUserOnce, processNotifications } from "@/lib/notifications";
 import { runProvisioningSweep } from "@/lib/provisioning";
 import { takeRateLimit } from "@/lib/rate-limit";
 import { MS_IN_DAY } from "@/lib/site";
+import { createSmtpTransport, smtpFailure } from "@/lib/smtp-transport";
 import { sendTelegramMessage, verifyTelegramAuth } from "@/lib/telegram";
 import { postTelegramWithCurl } from "@/lib/telegram-http";
 import { issueTelegramLinkToken } from "@/lib/telegram-link";
@@ -368,6 +371,121 @@ test("SmartCaptcha protects email registration and rejects failed, foreign and u
     assert.ok(await db.user.findUnique({ where: { email } }));
   } finally {
     await db.systemSettings.update({ where: { id: settings.id }, data: { captchaEnabled: settings.captchaEnabled } });
+  }
+});
+
+test("Yandex SMTP uses the selected IPv4 address and verifies TLS against the SMTP hostname", async () => {
+  const config = {
+    SMTP_HOST: "smtp.yandex.ru",
+    SMTP_CONNECT_HOST: "localhost",
+    SMTP_IP_FAMILY: "4",
+    SMTP_PORT: 465,
+    SMTP_USER: "smtp-fixture@yandex.ru",
+    SMTP_PASS: "fixture-app-password",
+    SMTP_FROM_EMAIL: "smtp-fixture@yandex.ru",
+  };
+  const implicit = await createSmtpTransport(config);
+  try {
+    const options = Reflect.get(implicit.transport.transporter, "options");
+    assert.equal(options.host, "127.0.0.1");
+    assert.equal(options.tls.servername, "smtp.yandex.ru");
+    assert.equal(options.secure, true);
+  } finally {
+    implicit.transport.close();
+  }
+
+  const startTls = await createSmtpTransport({ ...config, SMTP_PORT: 587, SMTP_SECURE: "false" });
+  try {
+    const options = Reflect.get(startTls.transport.transporter, "options");
+    assert.equal(options.secure, false);
+    assert.equal(options.requireTLS, true);
+  } finally {
+    startTls.transport.close();
+  }
+  await assert.rejects(createSmtpTransport({ ...config, SMTP_SECURE: "false" }), /SMTP_SECURE=true/);
+  await assert.rejects(createSmtpTransport({ ...config, SMTP_PASS: "" }), /пароль приложения/);
+  const authFailure = smtpFailure(Object.assign(new Error("SMTP response with private data"), {
+    code: "EAUTH", command: "AUTH PLAIN", responseCode: 535,
+  }));
+  assert.equal(authFailure.status, "smtp_auth_error");
+  assert.equal(authFailure.responseCode, 535);
+  assert.doesNotMatch(JSON.stringify(authFailure), /private data/);
+});
+
+test("a code accepted by SMTP matches the stored proof and can be used once", async () => {
+  const messages: string[] = [];
+  const envelope: string[] = [];
+  const smtpServer = createServer((socket) => {
+    socket.setEncoding("utf8");
+    socket.setTimeout(2000, () => socket.destroy());
+    socket.write("220 localhost ESMTP test\r\n");
+    let pending = "";
+    let messageLines: string[] | undefined;
+    socket.on("data", (chunk) => {
+      const lines = (pending + chunk).split("\r\n");
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        if (messageLines) {
+          if (line === ".") {
+            messages.push(messageLines.join("\r\n"));
+            messageLines = undefined;
+            socket.write("250 Accepted\r\n");
+          } else {
+            messageLines.push(line);
+          }
+        } else if (/^(EHLO|HELO) /.test(line)) {
+          socket.write("250 localhost\r\n");
+        } else if (/^(MAIL FROM|RCPT TO):/.test(line)) {
+          envelope.push(line);
+          socket.write("250 OK\r\n");
+        } else if (line === "DATA") {
+          messageLines = [];
+          socket.write("354 Send message\r\n");
+        } else if (line === "QUIT") {
+          socket.end("221 Bye\r\n");
+        } else {
+          socket.write("500 Unexpected command\r\n");
+        }
+      }
+    });
+  });
+  smtpServer.listen(0, "127.0.0.1");
+  await once(smtpServer, "listening");
+  const address = smtpServer.address();
+  assert.ok(address && typeof address !== "string");
+  const settings = {
+    SMTP_HOST: "localhost",
+    SMTP_CONNECT_HOST: undefined,
+    SMTP_IP_FAMILY: "4",
+    SMTP_PORT: address.port,
+    SMTP_SECURE: "false",
+    SMTP_FROM_EMAIL: "sender@example.test",
+    SMTP_USER: undefined,
+    SMTP_PASS: undefined,
+  } as const;
+  const previous = Object.fromEntries(Object.keys(settings).map((key) => [key, Reflect.get(env, key)]));
+  Object.assign(env, settings);
+  try {
+    const identifier = "verify-email:fixture:smtp@example.test";
+    await issueEmailCode({
+      identifier,
+      email: "SMTP@example.test",
+      subject: "1VPN email verification",
+      title: "Email verification",
+      description: "Enter this confirmation code in your personal account settings.",
+    });
+    assert.deepEqual(envelope, ["MAIL FROM:<sender@example.test>", "RCPT TO:<smtp@example.test>"]);
+    assert.equal(messages.length, 1);
+    const plain = /Content-Type: text\/plain[^\r\n]*\r\nContent-Transfer-Encoding: ([^\r\n]+)\r\n\r\n([\s\S]+?)\r\n--/i.exec(messages[0]);
+    assert.ok(plain);
+    const body = plain[1] === "base64" ? Buffer.from(plain[2], "base64").toString("utf8") : plain[2].replace(/=\r\n/g, "");
+    const code = /: (\d{6})\r?\n/.exec(body)?.[1];
+    assert.ok(code);
+    assert.equal(await consumeEmailCode(identifier, code), true);
+    assert.equal(await consumeEmailCode(identifier, code), false);
+  } finally {
+    Object.assign(env, previous);
+    await new Promise<void>((resolve) => smtpServer.close(() => resolve()));
   }
 });
 
