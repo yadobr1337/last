@@ -1,9 +1,28 @@
-import { execFile } from "node:child_process";
+import childProcess from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 type TelegramMethod = "sendMessage" | "sendPhoto" | "getMe" | "getWebhookInfo" | "setWebhook";
+
+function runCurl(config: string, connectTimeoutMs: number, timeoutMs: number) {
+  const args = [
+    "--disable", "--ipv4", "--noproxy", "*", "--proto", "=https",
+    "--silent", "--connect-timeout", String(connectTimeoutMs / 1000),
+    "--max-time", String(timeoutMs / 1000),
+    "--write-out", "\n%{http_code} %{time_connect} %{time_appconnect} %{size_request}",
+    "--config", "-",
+  ];
+
+  return new Promise<{ output: string; code?: string | number }>((resolve, reject) => {
+    const child = childProcess.execFile(
+      "curl", args, { encoding: "utf8", maxBuffer: 1024 * 1024, windowsHide: true },
+      (error, stdout) => resolve({ output: stdout, code: error ? error.code ?? "unknown" : undefined }),
+    );
+    child.stdin?.on("error", reject);
+    child.stdin?.end(config);
+  });
+}
 
 export async function postTelegramWithCurl(
   token: string,
@@ -34,33 +53,35 @@ export async function postTelegramWithCurl(
       `data-binary = ${JSON.stringify(`@${payloadPath}`)}`,
       "",
     ].join("\n");
-    const args = [
-      "--disable", "--ipv4", "--noproxy", "*", "--proto", "=https",
-      "--silent", "--connect-timeout", "5", "--max-time", String(timeoutMs / 1000),
-      "--write-out", "\n%{http_code}", "--config", "-",
-    ];
 
-    const output = await new Promise<string>((resolve, reject) => {
-      const child = execFile(
-        "curl", args, { encoding: "utf8", maxBuffer: 1024 * 1024, windowsHide: true },
-        (error, stdout) => {
-          if (error) {
-            reject(new Error(`Telegram curl failed (${error.code ?? "unknown"}).`));
-            return;
-          }
-          resolve(stdout);
-        },
-      );
-      child.stdin?.on("error", reject);
-      child.stdin?.end(config);
-    });
+    const deadline = performance.now() + timeoutMs;
+    for (let attempt = 1; ; attempt += 1) {
+      const remainingMs = Math.max(1, Math.ceil(deadline - performance.now()));
+      const connectTimeoutMs = Math.min(attempt < 3 ? 2500 : 5000, remainingMs);
+      const { code, output } = await runCurl(config, connectTimeoutMs, remainingMs);
+      const metrics = /\n(\d{3}) (\d+\.\d+) (\d+\.\d+) (\d+)$/.exec(output);
+      const status = Number(metrics?.[1]);
 
-    const suffix = /\n([1-5]\d{2})$/.exec(output);
-    if (!suffix) {
-      throw new Error("Invalid Telegram HTTP response.");
+      if (code === undefined) {
+        if (!metrics || status < 100 || status > 599) {
+          throw new Error(`${method}: invalid Telegram HTTP response.`);
+        }
+        return { ok: status >= 200 && status < 300, status, body: output.slice(0, metrics.index) };
+      }
+
+      const tcpSeconds = Number(metrics?.[2]);
+      const tlsSeconds = Number(metrics?.[3]);
+      const bytesSent = Number(metrics?.[4]);
+      // A timeout after sending a request does not tell us whether Telegram applied it.
+      if (code === 28 && status === 0 && tcpSeconds === 0 && tlsSeconds === 0 && bytesSent === 0 &&
+          attempt < 3 && performance.now() < deadline) {
+        continue;
+      }
+
+      const phase = !metrics ? "phase unavailable" : tcpSeconds === 0 ? "before TCP connect"
+        : tlsSeconds === 0 ? "during TLS handshake" : "after TLS handshake";
+      throw new Error(`${method}: Telegram curl failed (${code}, ${phase}, attempts=${attempt}).`);
     }
-    const status = Number(suffix[1]);
-    return { ok: status >= 200 && status < 300, status, body: output.slice(0, suffix.index) };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

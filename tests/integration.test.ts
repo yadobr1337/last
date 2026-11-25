@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import childProcess, { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Writable } from "node:stream";
 import { after, before, test } from "node:test";
 import { Role } from "@prisma/client";
 import { POST as processCron } from "@/app/api/cron/process/route";
@@ -21,6 +22,7 @@ import { runProvisioningSweep } from "@/lib/provisioning";
 import { takeRateLimit } from "@/lib/rate-limit";
 import { MS_IN_DAY } from "@/lib/site";
 import { verifyTelegramAuth } from "@/lib/telegram";
+import { postTelegramWithCurl } from "@/lib/telegram-http";
 import { withWorkLease } from "@/lib/work-lease";
 import { applyYooKassaPayment } from "@/lib/yookassa";
 import { applyTestMigrations, verifyMigrationAndBackup } from "./test-database.mjs";
@@ -289,6 +291,42 @@ test("Telegram widget signs the last name and accepts the proof only once", asyn
   const user = await provider.options.authorize({ ...auth, hash }, request);
   assert.equal(user?.telegramId, auth.id);
   assert.equal(await provider.options.authorize({ ...auth, hash }, request), null);
+});
+
+test("Telegram curl retries TCP timeouts within its attempt limit and stops after sending a request", async (t) => {
+  const tcpTimeout = { code: 28, output: "\n000 0.000000 0.000000 0" };
+  const response = { code: undefined, output: '{"ok":true}\n200 0.050000 0.100000 125' };
+  const replies = [tcpTimeout, tcpTimeout, response];
+  const curl = t.mock.method(childProcess, "execFile", (
+    _file: string,
+    _args: string[],
+    _options: object,
+    callback: (error: Error | null, stdout: string) => void,
+  ) => {
+    const reply = replies.shift();
+    assert.ok(reply, "Unexpected curl invocation");
+    const process = new childProcess.ChildProcess();
+    process.stdin = new Writable({
+      write(_chunk, _encoding, done) {
+        done();
+        const error = reply.code ? Object.assign(new Error("curl timed out"), { code: reply.code }) : null;
+        queueMicrotask(() => callback(error, reply.output));
+      },
+    });
+    return process;
+  });
+
+  const send = () => postTelegramWithCurl("12345:offline-mock", "sendMessage", "{}", 10_000);
+  assert.deepEqual(await send(), { ok: true, status: 200, body: '{"ok":true}' });
+  assert.equal(curl.mock.callCount(), 3);
+
+  replies.push(tcpTimeout, tcpTimeout, tcpTimeout);
+  await assert.rejects(send(), /28, before TCP connect, attempts=3/);
+  assert.equal(curl.mock.callCount(), 6);
+
+  replies.push({ code: 28, output: "\n000 0.050000 0.100000 125" });
+  await assert.rejects(send(), /28, after TLS handshake, attempts=1/);
+  assert.equal(curl.mock.callCount(), 7);
 });
 
 test("SmartCaptcha protects email registration and rejects failed, foreign and unavailable proofs", async (t) => {
