@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { db, writeTransaction } from "@/lib/db";
 import { canUseDemoPayments, MAX_BALANCE_KOPEKS } from "@/lib/money";
 import { notifyUserOnce } from "@/lib/notifications";
-import { escapeTelegramHtml } from "@/lib/telegram";
+import { telegramTemplates } from "@/lib/telegram-templates";
 import {
   buildRemoteUsername,
   deleteRemoteUser,
@@ -296,7 +296,7 @@ export async function creditBalance(tx: Prisma.TransactionClient, params: {
         type: NotificationType.TOPUP,
         cycleKey: params.notificationKey,
         nextAttemptAt: now,
-        deliveryText: `<b>1VPN</b>\nБаланс пополнен на <b>${(params.amountKopeks / 100).toFixed(2)} RUB</b>.`,
+        deliveryText: telegramTemplates.topUp(params.amountKopeks, user.balanceKopeks),
       },
     });
   }
@@ -398,6 +398,7 @@ export async function adjustBalanceByAdmin(params: {
     throw new Error("Adjustment amount must not be zero.");
   }
 
+  const notificationKey = `admin:${randomUUID()}`;
   const user = await writeTransaction(
     async (tx) => {
       const settled = await settleUserBilling(params.userId, tx);
@@ -411,7 +412,7 @@ export async function adjustBalanceByAdmin(params: {
       });
 
       if (params.amountKopeks > 0) {
-        return activateSubscription({
+        const credited = await activateSubscription({
           tx,
           user: settled,
           amountKopeks: params.amountKopeks,
@@ -419,6 +420,13 @@ export async function adjustBalanceByAdmin(params: {
           description: params.description,
           actor: params.actor,
         });
+        await notifyUserOnce({
+          user: credited,
+          type: NotificationType.TOPUP,
+          cycleKey: notificationKey,
+          message: telegramTemplates.topUp(params.amountKopeks, credited.balanceKopeks, true),
+        }, tx);
+        return credited;
       }
 
       const nextBalance = Math.max(0, settled.balanceKopeks + params.amountKopeks);
@@ -456,16 +464,6 @@ export async function adjustBalanceByAdmin(params: {
   );
 
   await tryImmediateVpnSync(user.id);
-
-  if (params.amountKopeks > 0) {
-    await notifyUserOnce({
-      user,
-      type: NotificationType.TOPUP,
-      cycleKey: `${user.billingCycle}:admin:${user.updatedAt.toISOString()}`,
-      message: `<b>1VPN</b>\nАдминистратор пополнил баланс на <b>${(params.amountKopeks / 100).toFixed(2)} RUB</b>.\nТекущий баланс: <b>${(user.balanceKopeks / 100).toFixed(2)} RUB</b>.`,
-    }).catch(() => console.error("[billing] admin credit notification queue failed"));
-  }
-
   return user;
 }
 
@@ -531,7 +529,7 @@ export async function grantDaysToAllUsers(params: {
             user,
             type: NotificationType.ADMIN_GRANT,
             cycleKey,
-            message: `🎁 <b>Вам начислено ${params.days} дн.</b>\n\n${escapeTelegramHtml(params.description)}`,
+            message: telegramTemplates.gift(params.days, params.description),
           }, tx);
           return true;
         },
@@ -584,9 +582,7 @@ export async function setBanState(userId: string, isBanned: boolean, actor: stri
     user,
     type: isBanned ? NotificationType.BANNED : NotificationType.UNBANNED,
     cycleKey: `${user.billingCycle}:${isBanned ? "banned" : "unbanned"}:${user.updatedAt.toISOString()}`,
-    message: isBanned
-      ? "<b>1VPN</b>\nДоступ временно приостановлен администратором."
-      : "<b>1VPN</b>\nДоступ восстановлен. Подписка снова активна.",
+    message: telegramTemplates.ban(isBanned),
   }).catch(() => console.error("[billing] ban notification queue failed"));
 
   return user;
@@ -666,8 +662,7 @@ async function reconcileUserVpn(managed: ManagedUser, settings: Awaited<ReturnTy
           user: managed,
           type: NotificationType.EXPIRING_SOON,
           cycleKey: `${managed.billingCycle}:one-day`,
-          message:
-            "<b>1VPN</b>\nДо окончания подписки остался <b>1 день</b>. Пополните баланс, чтобы сохранить доступ.",
+          message: telegramTemplates.lowBalance(managed.balanceKopeks, remainingMs),
         });
       }
 
@@ -742,7 +737,7 @@ async function reconcileUserVpn(managed: ManagedUser, settings: Awaited<ReturnTy
         user: managed,
         type: NotificationType.EXPIRED,
         cycleKey: `${managed.billingCycle}:expired`,
-        message: `<b>1VPN</b>\n⚠️ <b>Доступ скоро будет удалён</b>\n\nНа вашем балансе недостаточно средств. Пополните его в течение <b>${SUBSCRIPTION_DELETION_GRACE_HOURS} часов</b>, чтобы сохранить подписку.`,
+        message: telegramTemplates.expired(SUBSCRIPTION_DELETION_GRACE_HOURS),
       });
       await disableRemoteUser(remoteUuid);
     }
@@ -769,8 +764,7 @@ async function reconcileUserVpn(managed: ManagedUser, settings: Awaited<ReturnTy
         user: managed,
         type: NotificationType.DELETED,
         cycleKey: `${managed.billingCycle}:deleted`,
-        message:
-          "<b>1VPN</b>\nСсылка подписки удалена, пользователь удалён из сквада. Пополните баланс, чтобы создать доступ заново.",
+        message: telegramTemplates.deleted(),
       });
 
       return;

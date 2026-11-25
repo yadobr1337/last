@@ -137,7 +137,7 @@ export default async function DashboardPage() {
           }))} />
       </PageHeader>
 
-      <section className="console-stats" aria-label="Показатели подписки">
+      <section id="balance" className="console-stats" aria-label="Показатели подписки">
         <StatCard label="Баланс" value={formatCurrency(overview.user.balanceKopeks)}
           icon={<Wallet size={19} aria-hidden="true" />} />
         <StatCard label="Хватит примерно на" value={formatDays(overview.remainingDays, true)}

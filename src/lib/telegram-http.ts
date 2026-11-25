@@ -5,6 +5,8 @@ import { join } from "node:path";
 
 type TelegramMethod = "sendMessage" | "sendPhoto" | "getMe" | "getWebhookInfo" | "setWebhook";
 
+export class TelegramCurlError extends Error {}
+
 function runCurl(config: string, connectTimeoutMs: number, timeoutMs: number) {
   const args = [
     "--disable", "--ipv4", "--noproxy", "*", "--proto", "=https",
@@ -80,7 +82,7 @@ export async function postTelegramWithCurl(
 
       const phase = !metrics ? "phase unavailable" : tcpSeconds === 0 ? "before TCP connect"
         : tlsSeconds === 0 ? "during TLS handshake" : "after TLS handshake";
-      throw new Error(`${method}: Telegram curl failed (${code}, ${phase}, attempts=${attempt}).`);
+      throw new TelegramCurlError(`${method}: Telegram curl failed (${code}, ${phase}, attempts=${attempt}).`);
     }
   } finally {
     await rm(directory, { recursive: true, force: true });

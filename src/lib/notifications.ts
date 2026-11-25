@@ -2,11 +2,19 @@ import { NotificationType, type Prisma, type User } from "@prisma/client";
 import { setTimeout as delay } from "node:timers/promises";
 import { db } from "@/lib/db";
 import { withWorkLease } from "@/lib/work-lease";
-import {
-  escapeTelegramHtml,
-  sendTelegramMessage,
-  sendTelegramPhoto,
-} from "@/lib/telegram";
+import { sendTelegramMessage, sendTelegramPhoto } from "@/lib/telegram";
+import { queuedTelegramText, telegramAnnouncement, type TelegramButton } from "@/lib/telegram-templates";
+
+const notificationButtons: Record<NotificationType, TelegramButton> = {
+  TOPUP: "balance",
+  ADMIN_GRANT: "account",
+  EXPIRING_SOON: "topUp",
+  EXPIRED: "topUp",
+  DELETION_WARNING: "topUp",
+  DELETED: "topUp",
+  BANNED: "account",
+  UNBANNED: "account",
+};
 
 export async function notifyUserOnce(params: {
   user: Pick<User, "id" | "telegramId" | "email">;
@@ -59,7 +67,9 @@ export async function processNotifications() {
       });
       if (!reserved.count) continue;
 
-      const result = await sendTelegramMessage(event.user.telegramId, event.deliveryText);
+      const result = await sendTelegramMessage(
+        event.user.telegramId, queuedTelegramText(event.deliveryText), notificationButtons[event.type],
+      );
       const status = "status" in result ? result.status : undefined;
       const retry = !result.ok && attempt < 4 && (status === undefined || status === 429 || status >= 500);
       await db.notificationEvent.updateMany({
@@ -102,7 +112,7 @@ async function deliverTelegramBroadcast(params: { text: string; photo?: File | n
     },
   });
 
-  const message = `📣 <b>Объявление</b>\n\n${escapeTelegramHtml(params.text)}`;
+  const parts = telegramAnnouncement(params.text, Boolean(params.photo));
   let delivered = 0;
   let failed = 0;
   const errors = new Map<string, number>();
@@ -110,9 +120,15 @@ async function deliverTelegramBroadcast(params: { text: string; photo?: File | n
   for (const user of users) {
     if (!user.telegramId) continue;
 
-    const result = params.photo
-      ? await sendTelegramPhoto(user.telegramId, message, params.photo)
-      : await sendTelegramMessage(user.telegramId, message);
+    const firstButton = parts.length === 1 ? "site" : undefined;
+    let result = params.photo
+      ? await sendTelegramPhoto(user.telegramId, parts[0], params.photo, firstButton)
+      : await sendTelegramMessage(user.telegramId, parts[0], firstButton);
+    for (let index = 1; result.ok && index < parts.length; index++) {
+      await delay(1_000);
+      const button = index === parts.length - 1 ? "site" : undefined;
+      result = await sendTelegramMessage(user.telegramId, parts[index], button);
+    }
 
     if (result.ok) {
       delivered += 1;

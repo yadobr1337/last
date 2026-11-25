@@ -8,6 +8,7 @@ import { verifyPassword } from "@/lib/passwords";
 import { getSettings } from "@/lib/settings";
 import { ensureUserSquad } from "@/lib/squads";
 import { sendTelegramMessage, verifyTelegramAuth, verifyTelegramMiniAppAuth } from "@/lib/telegram";
+import { telegramTemplates } from "@/lib/telegram-templates";
 import { DEFAULT_HWID_DEVICE_LIMIT } from "@/lib/site";
 import { ensureUserPublicId } from "@/lib/user-identity";
 import { takeRateLimit } from "@/lib/rate-limit";
@@ -170,7 +171,8 @@ export const authOptions: NextAuthOptions = {
         if (linkedNow) {
           await sendTelegramMessage(
             verification.data.id,
-            "<b>1VPN</b>\nTelegram подключен. Уведомления о балансе и подписке включены.",
+            telegramTemplates.linkRecorded(),
+            "telegram",
           );
         }
         return getSessionUser(persisted.id);
@@ -199,7 +201,8 @@ export const authOptions: NextAuthOptions = {
         if (linkedNow) {
           await sendTelegramMessage(
             verification.data.id,
-            "<b>1VPN</b>\nTelegram подключен. Уведомления о балансе и подписке включены.",
+            telegramTemplates.linkRecorded(),
+            "telegram",
           );
         }
         return getSessionUser(persisted.id);

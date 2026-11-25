@@ -13,6 +13,7 @@ import { ConfirmSubmit, Modal } from "@/components/ui/dialog";
 import { Notice } from "@/components/ui/feedback";
 import { Input } from "@/components/ui/input";
 import { PendingButton } from "@/components/ui/pending-button";
+import { TELEGRAM_ANNOUNCEMENT_MAX_LENGTH } from "@/lib/telegram-templates";
 
 type Operation = "days" | "maintenance" | "broadcast";
 const initialState: AdminOperationActionState = { status: "idle", message: "" };
@@ -85,7 +86,7 @@ export function AdminOperations({ maintenanceEnabled, maintenanceMessage }: {
         description="Добавьте текст и, при необходимости, изображение.">
         <form action={broadcastAction} className="space-y-4">
           <label className="grid gap-2 text-sm text-muted">Текст сообщения
-            <textarea className="ui-input" maxLength={850} name="text" placeholder="Введите текст рассылки" required />
+            <textarea className="ui-input" maxLength={TELEGRAM_ANNOUNCEMENT_MAX_LENGTH} name="text" placeholder="Введите текст рассылки" required />
           </label>
           <label className="grid gap-2 text-sm text-muted">Изображение до 7 МБ, необязательно
             <Input accept="image/*" name="photo" type="file" />

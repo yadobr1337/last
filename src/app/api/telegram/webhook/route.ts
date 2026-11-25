@@ -7,6 +7,7 @@ import { queueVpnSync } from "@/lib/billing";
 import { env } from "@/lib/env";
 import { sendTelegramMessage } from "@/lib/telegram";
 import { consumeTelegramLinkToken } from "@/lib/telegram-link";
+import { telegramTemplates } from "@/lib/telegram-templates";
 
 export const runtime = "nodejs";
 
@@ -72,7 +73,8 @@ export async function POST(request: Request) {
     if (message?.chat.type === "private" && text.startsWith("/start")) {
       await sendTelegramMessage(
         String(message.chat.id),
-        "<b>1VPN</b>\nОткройте личный кабинет на сайте и нажмите «Привязать через Telegram».",
+        telegramTemplates.start(),
+        "telegram",
       );
     }
     return NextResponse.json({ ok: true });
@@ -82,7 +84,8 @@ export async function POST(request: Request) {
   if (!link) {
     await sendTelegramMessage(
       String(message.chat.id),
-      "<b>1VPN</b>\nСсылка привязки истекла или уже использована. Создайте новую в личном кабинете.",
+      telegramTemplates.linkExpired(),
+      "telegram",
     );
     return NextResponse.json({ ok: true });
   }
@@ -113,27 +116,23 @@ export async function POST(request: Request) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       await sendTelegramMessage(
         String(message.chat.id),
-        "<b>1VPN</b>\nЭтот Telegram уже привязан к другому аккаунту.",
+        telegramTemplates.linkTaken(),
+        "telegram",
       );
       return NextResponse.json({ ok: true });
     }
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
       await sendTelegramMessage(
         String(message.chat.id),
-        "<b>1VPN</b>\nСсылка привязки уже использована или аккаунт больше недоступен.",
+        telegramTemplates.linkUsed(),
+        "telegram",
       );
       return NextResponse.json({ ok: true });
     }
     throw error;
   }
 
-  const dashboardUrl = env.NEXTAUTH_URL
-    ? `\n\n<a href="${env.NEXTAUTH_URL}/dashboard/account">Вернуться в личный кабинет</a>`
-    : "";
-  await sendTelegramMessage(
-    String(message.chat.id),
-    `<b>1VPN</b>\nTelegram успешно привязан. Уведомления о балансе и подписке включены.${dashboardUrl}`,
-  );
+  await sendTelegramMessage(String(message.chat.id), telegramTemplates.linked(), "telegram");
 
   return NextResponse.json({ ok: true });
 }

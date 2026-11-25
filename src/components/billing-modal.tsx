@@ -18,7 +18,7 @@ export function BillingModal({ transactions, paymentsEnabled, topUpAction }: Bil
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Button type="button" onClick={() => setOpen(true)} size="lg">
+      <Button id="top-up" type="button" onClick={() => setOpen(true)} size="lg">
         <Plus size={19} aria-hidden="true" /> Пополнить
       </Button>
       <Modal open={open} onClose={() => setOpen(false)} title="Пополнить баланс" layout="wide">

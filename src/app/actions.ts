@@ -37,6 +37,7 @@ import {
 import { createSquad, deleteSquad, updateSquad } from "@/lib/squads";
 import { resolveUserIdentifier } from "@/lib/user-identity";
 import { SUBSCRIPTION_DELETION_GRACE_HOURS } from "@/lib/site";
+import { TELEGRAM_ANNOUNCEMENT_MAX_LENGTH } from "@/lib/telegram-templates";
 import { runProvisioningSweep } from "@/lib/provisioning";
 import { getProvisioningConfig } from "@/lib/provisioning-capacity";
 import {
@@ -334,9 +335,12 @@ export async function broadcastTelegramAction(
   void _previousState;
 
   try {
-    const text = parseRequiredString(formData.get("text"));
-    if (text.length > 850) {
-      throw new Error("Текст рассылки должен быть не длиннее 850 символов.");
+    const text = formData.get("text");
+    if (typeof text !== "string" || !text.trim()) {
+      throw new Error("Введите текст рассылки.");
+    }
+    if (text.length > TELEGRAM_ANNOUNCEMENT_MAX_LENGTH) {
+      throw new Error(`Текст рассылки должен быть не длиннее ${TELEGRAM_ANNOUNCEMENT_MAX_LENGTH} символов.`);
     }
 
     const photoEntry = formData.get("photo");

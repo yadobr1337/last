@@ -10,19 +10,22 @@ import { Role } from "@prisma/client";
 import { POST as processCron } from "@/app/api/cron/process/route";
 import { POST as yooKassaWebhook } from "@/app/api/payments/yookassa/webhook/route";
 import { POST as register } from "@/app/api/register/route";
+import { POST as telegramWebhook } from "@/app/api/telegram/webhook/route";
 import { authOptions } from "@/lib/auth";
-import { changeBillingSettings, changeDeviceLimit, creditBalance, grantDaysToAllUsers, runLifecycleSweep,
+import { adjustBalanceByAdmin, changeBillingSettings, changeDeviceLimit, creditBalance, grantDaysToAllUsers, runLifecycleSweep,
   setBanState, settleUserBilling, syncUserLifecycle, topUpBalance } from "@/lib/billing";
 import { db, writeTransaction } from "@/lib/db";
 import { consumeEmailCode } from "@/lib/email-codes";
 import { env } from "@/lib/env";
 import { parseRubleAmount } from "@/lib/money";
-import { notifyUserOnce, processNotifications } from "@/lib/notifications";
+import { broadcastTelegramMessage, notifyUserOnce, processNotifications } from "@/lib/notifications";
 import { runProvisioningSweep } from "@/lib/provisioning";
 import { takeRateLimit } from "@/lib/rate-limit";
 import { MS_IN_DAY } from "@/lib/site";
-import { verifyTelegramAuth } from "@/lib/telegram";
+import { sendTelegramMessage, verifyTelegramAuth } from "@/lib/telegram";
 import { postTelegramWithCurl } from "@/lib/telegram-http";
+import { issueTelegramLinkToken } from "@/lib/telegram-link";
+import { telegramAnnouncement, telegramReplyMarkup, telegramTemplates } from "@/lib/telegram-templates";
 import { withWorkLease } from "@/lib/work-lease";
 import { applyYooKassaPayment } from "@/lib/yookassa";
 import { applyTestMigrations, verifyMigrationAndBackup } from "./test-database.mjs";
@@ -387,18 +390,157 @@ test("persistent rate limit enforces attempt count across simultaneous requests"
 test("Telegram notification is sent once after concurrent reservation", async (t) => {
   const user = await userFixture({ email: "", telegramId: "12345" });
   let sends = 0;
-  t.mock.method(globalThis, "fetch", async (url: string) => {
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
     assert.match(url, /^https:\/\/api\.telegram\.org\//);
+    const payload = JSON.parse(String(init.body));
+    assert.match(payload.text, /^🛡 1VPN · Уведомление\n\n<b>Старое уведомление<\/b>/);
+    assert.deepEqual(payload.reply_markup, telegramReplyMarkup("balance", env.NEXTAUTH_URL));
     sends++;
     return Response.json({ ok: true });
   });
-  const event = { user, type: "TOPUP" as const, cycleKey: "queue:test", message: "Fixture" };
+  const event = { user, type: "TOPUP" as const, cycleKey: "queue:test", message: "<b>1VPN</b>\n<b>Старое уведомление</b>" };
   await Promise.all([notifyUserOnce(event), notifyUserOnce(event)]);
   await Promise.all([processNotifications(), processNotifications()]);
   const record = await db.notificationEvent.findFirstOrThrow({ where: { userId: user.id } });
   assert.equal(sends, 1);
   assert.equal(record.success, true);
   assert.equal(record.attempts, 1);
+});
+
+test("Telegram admin credit is queued before VPN synchronization and delivered once with the committed balance", async (t) => {
+  const squad = await db.squad.create({
+    data: { name: "Credit sync fixture", slug: "credit-sync-fixture", memberLimit: 15, remnawaveInternalSquadUuid: randomUUID() },
+  });
+  const user = await userFixture({ email: "", telegramId: "23456", squadId: squad.id, telegramBotConfirmedAt: new Date() });
+  const oldBase = env.REMNAWAVE_BASE_URL;
+  const oldToken = env.REMNAWAVE_API_TOKEN;
+  env.REMNAWAVE_BASE_URL = "https://panel.example.test";
+  env.REMNAWAVE_API_TOKEN = "mock-token";
+  t.after(() => { env.REMNAWAVE_BASE_URL = oldBase; env.REMNAWAVE_API_TOKEN = oldToken; });
+
+  let queuedBeforeVpn = false;
+  const delivered: Array<{ chat_id: string; text: string; reply_markup: unknown }> = [];
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+    if (new URL(url).hostname === "panel.example.test") {
+      const [credit, entry] = await Promise.all([
+        db.balanceTransaction.findFirst({ where: { userId: user.id, amountKopeks: 30_025 } }),
+        db.notificationEvent.findFirst({ where: { userId: user.id, type: "TOPUP" } }),
+      ]);
+      queuedBeforeVpn = Boolean(credit && entry?.nextAttemptAt);
+      return Response.json({}, { status: 503 });
+    }
+    delivered.push(JSON.parse(String(init.body)));
+    return Response.json({ ok: true });
+  });
+
+  const updated = await adjustBalanceByAdmin({ userId: user.id, amountKopeks: 30_025, description: "Fixture", actor: "test-admin" });
+  assert.equal(updated.balanceKopeks, 30_025);
+  assert.equal(queuedBeforeVpn, true);
+  await Promise.all([processNotifications(), processNotifications()]);
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].chat_id, user.telegramId);
+  assert.match(delivered[0].text, /Администратор зачислил: 300,25\s₽\nТекущий баланс: 300,25\s₽/);
+  assert.deepEqual(delivered[0].reply_markup, telegramReplyMarkup("balance", env.NEXTAUTH_URL));
+  const event = await db.notificationEvent.findFirstOrThrow({ where: { userId: user.id, type: "TOPUP" } });
+  assert.equal(event.success, true);
+  assert.equal(event.deliveryText, null);
+});
+
+test("Telegram webhook shows the configured account button and confirms a link once", async (t) => {
+  const user = await userFixture();
+  const token = await issueTelegramLinkToken(user.id);
+  const sender = { id: 34567, first_name: "Fixture", username: "fixture_bot_user" };
+  const messages: Array<{ text: string; reply_markup: unknown }> = [];
+  t.mock.method(globalThis, "fetch", async (_url: string, init: RequestInit) => {
+    messages.push(JSON.parse(String(init.body)));
+    return Response.json({ ok: true });
+  });
+  const post = (text: string, secret = env.TELEGRAM_WEBHOOK_SECRET!) => telegramWebhook(new Request("http://local.test", {
+    method: "POST",
+    headers: { "X-Telegram-Bot-Api-Secret-Token": secret },
+    body: JSON.stringify({ message: { text, chat: { id: sender.id, type: "private" }, from: sender } }),
+  }));
+
+  assert.equal((await post("/start", "invalid")).status, 401);
+  assert.equal((await post("/start")).status, 200);
+  assert.equal((await post(`/start link_${token}`)).status, 200);
+  assert.equal((await post(`/start link_${token}`)).status, 200);
+  const confirmed = await db.user.findUniqueOrThrow({ where: { id: user.id } });
+  assert.equal(confirmed.telegramId, String(sender.id));
+  assert.ok(confirmed.telegramBotConfirmedAt);
+  assert.deepEqual(messages.map(({ text }) => text), [
+    telegramTemplates.start(), telegramTemplates.linked(), telegramTemplates.linkExpired(),
+  ]);
+  assert.deepEqual(messages[1].reply_markup, telegramReplyMarkup("telegram", env.NEXTAUTH_URL));
+});
+
+test("Telegram templates format amounts, use existing destinations and escape administrator content", () => {
+  const copies = [
+    [telegramTemplates.linkRecorded(), "Telegram добавлен"],
+    [telegramTemplates.linkTaken(), "Telegram уже привязан"],
+    [telegramTemplates.linkUsed(), "Не удалось подтвердить привязку"],
+    [telegramTemplates.topUp(30_000, 45_025), "Текущий баланс: 450,25"],
+    [telegramTemplates.gift(2, "<b>& подарок</b>"), "&lt;b&gt;&amp; подарок&lt;/b&gt;"],
+    [telegramTemplates.lowBalance(4_900, MS_IN_DAY), "1 день"],
+    [telegramTemplates.expired(24), "24 часа"],
+    [telegramTemplates.deleted(), "Ссылка подписки удалена"],
+    [telegramTemplates.ban(true), "приостановлен администратором"],
+    [telegramTemplates.ban(false), "Ограничение снято"],
+  ];
+  for (const [copy, expected] of copies) {
+    assert.ok(copy.includes(expected));
+    assert.match(copy, /^\S+ 1VPN · [^\n]+\n\n<b>[^\n]+<\/b>\n\n/);
+    assert.doesNotMatch(copy, /<a\s|━━/);
+  }
+  assert.doesNotMatch(telegramTemplates.lowBalance(5, 0), /хватит/);
+  assert.equal(telegramReplyMarkup("topUp", "https://example.test")?.inline_keyboard[0][0].url, "https://example.test/dashboard#top-up");
+  assert.equal(telegramReplyMarkup("site", "javascript:alert(1)"), undefined);
+  assert.equal(telegramReplyMarkup("site", "https://user:pass@example.test"), undefined);
+});
+
+test("Telegram broadcast preserves long text, line breaks, links, photo and a single button per recipient", async (t) => {
+  const text = "<b>Текст</b> & 1\nhttps://example.test/?a=1&b=2\n" + "Длинная строка 🚀\n".repeat(245);
+  const parts = telegramAnnouncement(text, true);
+  const plainText = (part: string) => part.replace(/<\/?b>/g, "").replace(/&(amp|lt|gt);/g, (_, entity: "amp" | "lt" | "gt") =>
+    ({ amp: "&", lt: "<", gt: ">" })[entity],
+  );
+  assert.ok(plainText(parts[0]).length <= 1024);
+  assert.ok(parts.slice(1).every((part) => plainText(part).length <= 4096));
+  assert.equal(plainText(parts.join("")).split("\n\n").slice(2).join("\n\n"), text);
+  assert.match(parts[0], /&lt;b&gt;Текст&lt;\/b&gt; &amp; 1\nhttps:\/\/example.test\/\?a=1&amp;b=2/);
+  assert.equal(telegramAnnouncement("1", false)[0], "📢 1VPN · Объявление\n\n<b>Новости сервиса</b>\n\n1");
+
+  const expected = await db.user.count({ where: { telegramId: { not: null } } });
+  const captions: string[] = [];
+  const chunks: Array<{ text: string; reply_markup?: unknown }> = [];
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+    if (url.endsWith("/sendPhoto")) {
+      assert.ok(init.body instanceof FormData);
+      assert.ok(init.body.get("photo") instanceof File);
+      assert.equal(init.body.has("reply_markup"), false);
+      captions.push(String(init.body.get("caption")));
+    } else {
+      chunks.push(JSON.parse(String(init.body)));
+    }
+    return Response.json({ ok: true });
+  });
+  const photo = new File([new Uint8Array([1, 2, 3])], "test.jpg", { type: "image/jpeg" });
+  const result = await broadcastTelegramMessage({ text, photo, actor: "mock-admin" });
+  assert.equal(result?.delivered, expected);
+  assert.equal(result?.failed, 0);
+  assert.deepEqual(captions, Array(expected).fill(parts[0]));
+  assert.equal(chunks.length, expected * (parts.length - 1));
+  assert.equal(chunks.filter(({ reply_markup }) => reply_markup).length, expected);
+  assert.deepEqual(chunks.at(-1)?.reply_markup, telegramReplyMarkup("site", env.NEXTAUTH_URL));
+});
+
+test("Telegram delivery reports API failures without recording provider text", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => Response.json({
+    ok: false, error_code: 403, description: "Forbidden: bot was blocked by the user. Untrusted provider details",
+  }));
+  assert.deepEqual(await sendTelegramMessage("123", telegramTemplates.start(), "telegram"), {
+    ok: false, status: 403, error: "Telegram HTTP 403 (bot blocked by recipient)",
+  });
 });
 
 test("Remnawave recovers from lost create response and keeps issued subscription link on update", async (t) => {

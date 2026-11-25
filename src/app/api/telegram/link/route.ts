@@ -4,6 +4,7 @@ import { z } from "zod";
 import { writeTransaction } from "@/lib/db";
 import { getAuthSession } from "@/lib/auth";
 import { sendTelegramMessage, verifyTelegramAuth } from "@/lib/telegram";
+import { telegramTemplates } from "@/lib/telegram-templates";
 import { takeRateLimit } from "@/lib/rate-limit";
 import { queueVpnSync } from "@/lib/billing";
 
@@ -63,7 +64,8 @@ export async function POST(request: Request) {
 
   await sendTelegramMessage(
     verification.data.id,
-    "<b>1VPN</b>\nTelegram привязан. Уведомления о балансе и подписке включены.",
+    telegramTemplates.linkRecorded(),
+    "telegram",
   );
 
   return NextResponse.json({ ok: true });

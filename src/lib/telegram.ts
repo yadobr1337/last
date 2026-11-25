@@ -1,5 +1,6 @@
 import { env } from "@/lib/env";
-import { postTelegramWithCurl } from "@/lib/telegram-http";
+import { postTelegramWithCurl, TelegramCurlError } from "@/lib/telegram-http";
+import { telegramReplyMarkup, type TelegramButton } from "@/lib/telegram-templates";
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 
@@ -152,30 +153,6 @@ export async function verifyTelegramMiniAppAuth(initData: string) {
   } as const;
 }
 
-function getSiteUrl() {
-  return env.NEXTAUTH_URL?.replace(/\/+$/, "") ?? null;
-}
-
-function decorateTelegramMessage(text: string) {
-  const content = text.replace(/^<b>1VPN<\/b>\s*\n?/, "").trim();
-  const siteUrl = getSiteUrl();
-  const footer = siteUrl ? `\n\n━━━━━━━━━━\n<a href="${siteUrl}">Открыть сайт 1VPN →</a>` : "";
-  return `✨ <b>1VPN</b>\n<i>Уведомление сервиса</i>\n\n${content}${footer}`;
-}
-
-function buildReplyMarkup() {
-  const siteUrl = getSiteUrl();
-  return siteUrl
-    ? {
-        inline_keyboard: [[{ text: "Открыть 1VPN", url: siteUrl }]],
-      }
-    : undefined;
-}
-
-export function escapeTelegramHtml(value: string) {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-}
-
 function postTelegram(
   token: string,
   method: "sendMessage" | "sendPhoto",
@@ -195,7 +172,36 @@ function postTelegram(
   });
 }
 
-export async function sendTelegramMessage(chatId: string, text: string) {
+const telegramResult = z.object({
+  ok: z.boolean(),
+  error_code: z.number().int().min(400).max(599).optional(),
+  description: z.string().optional(),
+});
+
+async function deliveryResult(response: Awaited<ReturnType<typeof postTelegram>>) {
+  let body: unknown;
+  try {
+    body = typeof response.body === "string" ? JSON.parse(response.body)
+      : response instanceof Response ? await response.json() : null;
+  } catch {
+    body = null;
+  }
+  const result = telegramResult.safeParse(body);
+  if (response.ok && result.success && result.data.ok) return { ok: true } as const;
+
+  const data = result.success ? result.data : undefined;
+  const status = response.ok ? data?.error_code : response.status;
+  if (!status) {
+    return { ok: false, error: "Telegram returned an invalid delivery response." } as const;
+  }
+  const description = data?.description?.toLowerCase() ?? "";
+  const reason = description.includes("bot was blocked") ? " (bot blocked by recipient)"
+    : description.includes("chat not found") || description.includes("can't initiate conversation")
+      ? " (recipient needs to start the bot)" : "";
+  return { ok: false, error: `Telegram HTTP ${status}${reason}`, status } as const;
+}
+
+export async function sendTelegramMessage(chatId: string, text: string, button?: TelegramButton) {
   if (!env.TELEGRAM_BOT_TOKEN) {
     return { ok: false, error: "Telegram bot token is not configured." } as const;
   }
@@ -206,28 +212,24 @@ export async function sendTelegramMessage(chatId: string, text: string) {
       "sendMessage",
       JSON.stringify({
         chat_id: chatId,
-        text: decorateTelegramMessage(text),
+        text,
         parse_mode: "HTML",
-        disable_web_page_preview: true,
-        reply_markup: buildReplyMarkup(),
+        link_preview_options: { is_disabled: true },
+        reply_markup: telegramReplyMarkup(button, env.NEXTAUTH_URL),
       }),
       10_000,
     );
 
-    if (!response.ok) {
-      return { ok: false, error: `Telegram HTTP ${response.status}`, status: response.status } as const;
-    }
-
-    return { ok: true } as const;
-  } catch {
+    return await deliveryResult(response);
+  } catch (error) {
     return {
       ok: false,
-      error: "Telegram request timed out or connection failed.",
+      error: error instanceof TelegramCurlError ? error.message : "Telegram request timed out or connection failed.",
     } as const;
   }
 }
 
-export async function sendTelegramPhoto(chatId: string, text: string, photo: File) {
+export async function sendTelegramPhoto(chatId: string, caption: string, photo: File, button?: TelegramButton) {
   if (!env.TELEGRAM_BOT_TOKEN) {
     return { ok: false, error: "Telegram bot token is not configured." } as const;
   }
@@ -235,26 +237,22 @@ export async function sendTelegramPhoto(chatId: string, text: string, photo: Fil
   try {
     const body = new FormData();
     body.set("chat_id", chatId);
-    body.set("caption", decorateTelegramMessage(text).slice(0, 1024));
+    body.set("caption", caption);
     body.set("parse_mode", "HTML");
     body.set("photo", photo, photo.name || "broadcast.jpg");
 
-    const replyMarkup = buildReplyMarkup();
+    const replyMarkup = telegramReplyMarkup(button, env.NEXTAUTH_URL);
     if (replyMarkup) {
       body.set("reply_markup", JSON.stringify(replyMarkup));
     }
 
     const response = await postTelegram(env.TELEGRAM_BOT_TOKEN, "sendPhoto", body, 20_000);
 
-    if (!response.ok) {
-      return { ok: false, error: `Telegram HTTP ${response.status}`, status: response.status } as const;
-    }
-
-    return { ok: true } as const;
-  } catch {
+    return await deliveryResult(response);
+  } catch (error) {
     return {
       ok: false,
-      error: "Telegram photo request timed out or connection failed.",
+      error: error instanceof TelegramCurlError ? error.message : "Telegram photo request timed out or connection failed.",
     } as const;
   }
 }

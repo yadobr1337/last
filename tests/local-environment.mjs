@@ -21,6 +21,7 @@ if (process.env.SITE1VPN_TEST_CHILD !== "1") {
     YOOKASSA_RETURN_URL: "https://local.test/dashboard",
     CRON_SECRET: "",
     TELEGRAM_BOT_TOKEN: "12345:offline-mock",
+    TELEGRAM_WEBHOOK_SECRET: "offline-telegram-webhook-secret",
     TELEGRAM_USE_CURL_IPV4: "false",
     SMARTCAPTCHA_SITE_KEY: "offline-captcha-site-key",
     SMARTCAPTCHA_SERVER_KEY: "offline-captcha-server-key",
